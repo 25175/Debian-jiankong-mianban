@@ -1,4 +1,4 @@
-# jiankong 监控包
+# Debian 服务监控面板依赖
 
 ## 已包含
 
@@ -7,13 +7,15 @@
 - `jiankong.service`: systemd user service 模板
 - `icon.svg` / `apple-touch-icon.png`: 页面图标
 - `README.md`: 功能与安全说明
-- `control-token`: 本机控制令牌，仅在部署机器本地创建，不提交 Git
+- `control-token`: 本机控制令牌
+- `jiankong.json`: 当前服务器的名称和可选覆盖配置
+- `install.sh`: 自动生成本机 systemd user service
 
 ## Python 依赖
 
 无第三方 Python 包。仅使用 Python 3 标准库。
 
-## D12 系统依赖
+## 服务器依赖
 
 监控服务自身：
 
@@ -21,20 +23,19 @@
 - Python 3.9+
 - systemd user services
 
-当前 D12 被监控的外部服务与命令：
+自动发现使用的命令与接口：
 
 - `systemctl --user`
-- `multica` CLI，当前路径 `/usr/local/bin/multica`
-- `multica daemon`，当前监听 `127.0.0.1:19514`
-- `xiaode-saas.service`，开发服务端口 `3000`
-- Chromium，CDP 端口 `9222`
-- Xvfb、x11vnc、noVNC/websockify
-- 生产端口监控默认检查 `3001`
+- `ss -ltnp`：扫描当前服务器 TCP 监听端口
+- `systemctl --user`：读取当前用户 service 并关联主进程
+- `/proc`：读取 CPU、内存和网卡统计
+- `multica`：如果在 PATH 中存在则自动读取 agent/task
+- Codex 会话目录：默认使用当前用户的 `~/.codex/sessions`
 
 ## 本地部署注意事项
 
-`jiankong.service` 中的 `WorkingDirectory` 和 `ExecStart` 使用的是 D12 的绝对路径；部署到其他机器前需要改成实际目录。
+在项目目录执行 `./install.sh`。脚本会动态写入当前目录和当前 Python 解释器，不需要修改 service 模板。
 
-`control-token` 已包含当前 D12 的令牌，不要提交 Git、上传公共网盘或放入前端代码。若迁移到新机器，应重新生成令牌并同步服务端配置。
+每台服务器应使用自己的 `control-token`。本仓库按用户明确要求保留当前目录中的令牌文件，但不要把该令牌用于其他服务器；部署其他服务器时删除旧令牌后重新执行 `./install.sh`。
 
-远程浏览器网关需要 D12 的 noVNC/websockify 服务运行在 `127.0.0.1:6080`，并需要监控服务能够访问该端口。
+远程浏览器网关只有在服务器实际监听 noVNC/websockify 端口时才显示；也可以在 `jiankong.json` 的 `browser.port` 中明确指定。

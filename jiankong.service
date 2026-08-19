@@ -1,12 +1,10 @@
 [Unit]
-Description=D12 read-only LAN status monitor
+Description=Portable Debian service monitor
 
 [Service]
 Type=simple
-WorkingDirectory=/home/seek/multica_workspaces/265c16b2-714c-4ce0-ad39-f1ee4e2ea304/2273f22b/workdir/tokenark-xiaode-web/jiankong
-Environment=HOME=/home/seek
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/python3 /home/seek/multica_workspaces/265c16b2-714c-4ce0-ad39-f1ee4e2ea304/2273f22b/workdir/tokenark-xiaode-web/jiankong/server.py
+WorkingDirectory=__INSTALL_DIR__
+ExecStart=__PYTHON_BIN__ __INSTALL_DIR__/server.py
 Restart=always
 RestartSec=3
 

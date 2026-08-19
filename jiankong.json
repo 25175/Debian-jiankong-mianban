@@ -1,0 +1,22 @@
+{
+  "name": "Debian 服务监控面板",
+  "listen": {
+    "host": "0.0.0.0",
+    "port": 8888
+  },
+  "services": [],
+  "browser": {
+    "enabled": true,
+    "port": null
+  },
+  "multica": {
+    "enabled": true,
+    "executable": null,
+    "working_directory": null,
+    "runtime_id": null
+  },
+  "codex": {
+    "enabled": true,
+    "sessions_dir": null
+  }
+}
