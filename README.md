@@ -28,6 +28,27 @@
 - `jiankong.service`：常驻 user service 定义
 - `control-token`：本机控制令牌
 - `jiankong.json`：面板名称、监听端口和可选服务匹配规则
-- `install.sh`：按当前目录和当前 Python 路径安装 systemd user service
+- `install.sh`：首次安装生成本机令牌并显示；提供查看、重新生成、安装、重启、状态菜单
 
 端口、服务匹配、名称和可选组件配置见 `jiankong.json`。程序不会假设某个固定业务端口或固定服务器 IP。
+
+## 安装与令牌管理
+
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+第一次在某台服务器执行时，即使仓库中带有 `control-token`，安装器也会把它视为仓库初始令牌，生成该服务器自己的新令牌并立即显示。安装器在用户状态目录记录本机已初始化标记；后续再次执行不会自动重新生成。
+
+菜单中的“查看当前令牌”会再次显示令牌；“重新生成令牌”会先确认，生成并显示新令牌，然后重启已安装的服务，使旧令牌失效。
+
+也可以使用非交互命令：
+
+```bash
+./install.sh --install
+./install.sh --show-token
+./install.sh --regenerate --yes
+./install.sh --restart
+./install.sh --status
+```
