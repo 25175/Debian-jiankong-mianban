@@ -27,8 +27,37 @@
 - `server.py`：监控与控制 HTTP 服务
 - `jiankong.service`：常驻 user service 定义
 - `control-token`：本机控制令牌
-- `jiankong.json`：面板名称、监听端口和可选服务匹配规则
+- `jiankong.json`：面板名称、监听端口、服务匹配规则和 Cloudflare Guardian 非敏感接入配置
+- `guardian.html`：Cloudflare Worker + MonkeyCode 可视化保活管理页
+- `cloudflare-guardian-secret.json`：本机 Worker 管理密码（运行后生成、权限 600、不会提交）
 - `install.sh`：首次安装生成本机令牌并显示；提供查看、重新生成、安装、重启、状态菜单
+
+## Cloudflare Worker / MonkeyCode 保活中心
+
+在面板首页输入本机 `control-token` 后，访问：
+
+```text
+http://<服务器地址>:8888/guardian/
+```
+
+该页面将 `jiankong` 作为可视化管理面、Cloudflare Worker 作为持续运行的代理与 Cron 保活面：
+
+- 实时读回 Worker KV 的上游健康、上次/下次保活、保活结果与错误；
+- 使用卡片和时间线展示 Worker、MonkeyCode 上游和自动保活状态；
+- 可设置上游 `8787` 地址、Task ID、13–14 分钟随机区间、保活消息、代理超时、重试等待及开关；
+- “保存接入信息”仅保存在当前部署的 jiankong；“写入 Worker，立即生效”才会把设置写入 Worker KV；
+- 可手动探测上游或请求 Worker 立即发出真实保活输入；
+- Worker 管理密码仅写入当前服务器的 `cloudflare-guardian-secret.json`（权限 600），不写入 `jiankong.json`、网页响应、日志或 Git。
+
+新 MonkeyCode 实例的接入步骤：
+
+1. 在新实例部署本项目并打开 `/guardian/`；
+2. 输入该实例的 `control-token`；
+3. 填写现有 Cloudflare Worker 的 `/cf-admin/` 地址及其管理密码、该实例的 `8787` 预览上游和 Task ID；
+4. 点击“保存接入信息”，再点击“写入 Worker，立即生效”；
+5. 页面自动读回 Worker / KV / 上游状态。Worker 的 Cron 保持 780–840 秒随机间隔，即 13–14 分钟。
+
+注意：Worker Cron 是唯一不依赖 MonkeyCode 运行状态的保活执行者。部署在 MonkeyCode 的 jiankong 是管理与观察面；如果该实例休眠，Worker 仍会继续执行已写入 KV 的保活计划。保持 Worker 的 `MONKEYCODE_COOKIE` Secret 有效；Cookie 被服务端吊销或到期时，页面会记录保活失败，但不能自行重新登录。
 
 端口、服务匹配、名称和可选组件配置见 `jiankong.json`。程序不会假设某个固定业务端口或固定服务器 IP。
 

@@ -16,9 +16,12 @@ import socket
 import subprocess
 import threading
 import time
+from http.cookiejar import CookieJar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
+from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 
 BASE = Path(__file__).resolve().parent
@@ -32,6 +35,20 @@ CONFIG_DEFAULT = {
     "browser": {"enabled": True, "port": None},
     "multica": {"enabled": True, "executable": None, "working_directory": None, "runtime_id": None},
     "codex": {"enabled": True, "sessions_dir": None},
+    "cloudflare_guardian": {
+        "enabled": True,
+        "worker_admin_url": "",
+        "worker_config": {
+            "upstreamOrigin": "",
+            "taskId": "",
+            "minSeconds": 780,
+            "maxSeconds": 840,
+            "keepaliveMessage": "1",
+            "proxyTimeoutMs": 15000,
+            "retryAfterSeconds": 30,
+            "enabled": True,
+        },
+    },
 }
 
 
@@ -52,12 +69,47 @@ def load_config() -> dict:
         return dict(CONFIG_DEFAULT)
 
 
+def atomic_json_write(path: Path, value: dict, mode: int = 0o600) -> None:
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.chmod(temp, mode)
+    os.replace(temp, path)
+    os.chmod(path, mode)
+
+
+def load_guardian_secrets() -> dict:
+    try:
+        return json.loads(GUARDIAN_SECRET_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def guardian_config() -> dict:
+    return dict(CONFIG.get("cloudflare_guardian") or {})
+
+
+def guardian_ready() -> tuple[bool, str]:
+    cfg = guardian_config()
+    secrets_data = load_guardian_secrets()
+    if not cfg.get("enabled", True):
+        return False, "Cloudflare Guardian 已在本机配置中停用"
+    if not str(cfg.get("worker_admin_url") or "").startswith("https://"):
+        return False, "尚未设置 Worker 管理地址"
+    if not secrets_data.get("worker_admin_password"):
+        return False, "尚未保存 Worker 管理密码"
+    return True, "已就绪"
+
+
 CONFIG = load_config()
 HOST = str(CONFIG["listen"].get("host") or "0.0.0.0")
 PORT = int(CONFIG["listen"].get("port") or 8888)
 TOKEN = TOKEN_PATH.read_text(encoding="utf-8").strip() if TOKEN_PATH.exists() else ""
 TASK_CACHE: dict = {"at": 0.0, "data": {"available": False, "running": 0, "recent": [], "error": "正在读取任务"}}
 TASK_CACHE_TTL = 15
+GUARDIAN_SECRET_PATH = BASE / "cloudflare-guardian-secret.json"
+GUARDIAN_LOCK = threading.Lock()
+GUARDIAN_HISTORY: collections.deque = collections.deque(maxlen=80)
+GUARDIAN_SECRET_FIELDS = ("worker_admin_password",)
 ISSUE_TITLE_CACHE: dict[str, str] = {}
 TASK_LOCK = threading.Lock()
 RESOURCE_HISTORY = collections.deque(maxlen=1200)
@@ -77,6 +129,81 @@ def command(*args: str, timeout: int = 8, cwd: str | None = None) -> tuple[int, 
         return p.returncode, p.stdout.strip()
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 127, str(exc)
+
+
+def guardian_request(method: str, endpoint: str, payload: dict | None = None) -> tuple[int, dict]:
+    ready, reason = guardian_ready()
+    if not ready:
+        return 503, {"ok": False, "error": reason}
+    cfg, secrets_data = guardian_config(), load_guardian_secrets()
+    configured = str(cfg["worker_admin_url"]).rstrip("/")
+    base = configured if configured.endswith("/cf-admin") else configured + "/cf-admin"
+    base += "/"
+    jar = CookieJar()
+    opener = build_opener(HTTPCookieProcessor(jar))
+    password = str(secrets_data["worker_admin_password"])
+    try:
+        browser_headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140 Safari/537.36", "Accept": "application/json,text/plain,*/*"}
+        login = Request(urljoin(base, "login"), data=urlencode({"password": password}).encode(), method="POST", headers={**browser_headers, "Content-Type": "application/x-www-form-urlencoded"})
+        with opener.open(login, timeout=12) as response:
+            if response.geturl().rstrip("/") != base.rstrip("/"):
+                return 401, {"ok": False, "error": "Worker 管理密码无效"}
+        url = urljoin(base, "guardian-api/" + endpoint.lstrip("/"))
+        data = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
+        request = Request(url, data=data, method=method, headers={**browser_headers, **({"Content-Type": "application/json"} if data else {})})
+        with opener.open(request, timeout=20) as response:
+            raw = response.read().decode("utf-8", "replace")
+            body = json.loads(raw) if raw else {}
+            return response.status, body
+    except HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError:
+            body = {"error": raw[:500] or f"Worker HTTP {exc.code}"}
+        return exc.code, {"ok": False, **body}
+    except (URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return 502, {"ok": False, "error": f"Worker 通信失败：{exc}"}
+
+
+def guardian_status() -> dict:
+    ready, reason = guardian_ready()
+    result = {"ready": ready, "message": reason, "history": list(GUARDIAN_HISTORY)}
+    if not ready:
+        return result
+    code, body = guardian_request("GET", "status")
+    result.update({"http_status": code, "worker": body, "ok": code == 200 and not body.get("error")})
+    return result
+
+
+def save_guardian_setup(body: dict) -> dict:
+    global CONFIG
+    current = guardian_config()
+    worker_url = str(body.get("worker_admin_url") or current.get("worker_admin_url") or "").strip().rstrip("/")
+    if worker_url.endswith("/cf-admin"):
+        worker_url = worker_url[: -len("/cf-admin")] + "/cf-admin"
+    if worker_url and not re.fullmatch(r"https://[^/]+(?:/[^?#]*)?", worker_url):
+        raise ValueError("Worker 管理地址必须是 https://域名/cf-admin 格式")
+    next_guardian = merge_config(current, {
+        "enabled": bool(body.get("enabled", current.get("enabled", True))),
+        "worker_admin_url": worker_url + "/" if worker_url else "",
+        "worker_config": merge_config(current.get("worker_config", {}), dict(body.get("worker_config") or {})),
+    })
+    CONFIG = merge_config(CONFIG, {"cloudflare_guardian": next_guardian})
+    persisted = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.exists() else {}
+    persisted["cloudflare_guardian"] = next_guardian
+    atomic_json_write(CONFIG_PATH, persisted, 0o600)
+    password = str(body.get("worker_admin_password") or "").strip()
+    if password:
+        secret = load_guardian_secrets()
+        secret["worker_admin_password"] = password
+        atomic_json_write(GUARDIAN_SECRET_PATH, secret, 0o600)
+    return {"worker_admin_url": next_guardian["worker_admin_url"], "enabled": next_guardian["enabled"], "password_saved": bool(load_guardian_secrets().get("worker_admin_password")), "worker_config": next_guardian["worker_config"]}
+
+
+def guardian_event(kind: str, ok: bool, message: str) -> None:
+    with GUARDIAN_LOCK:
+        GUARDIAN_HISTORY.appendleft({"at": int(time.time() * 1000), "kind": kind, "ok": ok, "message": message[:300]})
 
 
 def _prune_browser_tokens() -> None:
@@ -538,6 +665,25 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if asset_path in ("/guardian", "/guardian/"):
+            asset = BASE / "guardian.html"
+            if not asset.is_file():
+                self.send_json(404, {"error": "Guardian management page is missing"})
+                return
+            data = asset.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if asset_path == "/api/guardian/status":
+            if not self.authorized():
+                self.send_json(401, {"error": "需要控制令牌"})
+                return
+            self.send_json(200, guardian_status())
+            return
         if asset_path == "/api/status":
             self.send_json(200, status(self.headers.get("Host", "")))
             return
@@ -555,6 +701,48 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": "Not found"})
 
     def do_POST(self) -> None:
+        if self.path == "/api/guardian/setup":
+            if not self.authorized():
+                self.send_json(401, {"error": "控制令牌无效"})
+                return
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+                saved = save_guardian_setup(body)
+                guardian_event("配置", True, "已保存本机 Worker 接入配置")
+                self.send_json(200, {"ok": True, "setup": saved})
+            except (ValueError, OSError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+            return
+        if self.path == "/api/guardian/apply":
+            if not self.authorized():
+                self.send_json(401, {"error": "控制令牌无效"})
+                return
+            payload = guardian_config().get("worker_config", {})
+            code, response = guardian_request("PUT", "config", payload)
+            ok = code == 200 and not response.get("error")
+            guardian_event("应用配置", ok, response.get("error") or "Worker 配置已写入 KV 并立即生效")
+            self.send_json(code if code < 500 else 502, {"ok": ok, "worker": response})
+            return
+        if self.path == "/api/guardian/keepalive":
+            if not self.authorized():
+                self.send_json(401, {"error": "控制令牌无效"})
+                return
+            code, response = guardian_request("POST", "trigger")
+            # The Worker records Task WebSocket delivery asynchronously; an edge timeout
+            # must remain visible rather than being presented as a successful keepalive.
+            ok = code == 200 and not response.get("error")
+            guardian_event("立即保活", ok, response.get("error") or "已请求 Worker 发送真实 Task 输入")
+            self.send_json(200, {"ok": ok, "worker_http_status": code, "worker": response})
+            return
+        if self.path == "/api/guardian/probe":
+            if not self.authorized():
+                self.send_json(401, {"error": "控制令牌无效"})
+                return
+            code, response = guardian_request("GET", "probe")
+            ok = code == 200 and not response.get("error") and bool((response.get("upstream") or {}).get("ok"))
+            guardian_event("上游探测", ok, response.get("error") or f"上游 HTTP {((response.get('upstream') or {}).get('status', '未知'))}")
+            self.send_json(code if code < 500 else 502, {"ok": ok, "worker": response})
+            return
         if self.path == "/api/browser-session":
             if not self.authorized():
                 self.send_json(401, {"error": "控制令牌无效"})

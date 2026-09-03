@@ -1,0 +1,5 @@
+control-token
+cloudflare-guardian-secret.json
+*.tmp
+__pycache__/
+*.pyc
