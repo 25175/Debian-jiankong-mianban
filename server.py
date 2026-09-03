@@ -398,6 +398,23 @@ def public_host(host_header: str) -> str:
     return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
 
 
+def service_public_url(host_header: str, port: int, configured_url: str | None = None) -> str | None:
+    """Build an actual user entry URL from the current host, without fixed VM IDs."""
+    host = public_host(host_header)
+    if configured_url:
+        try:
+            return str(configured_url).format(host=host, port=port, preview_host=re.sub(r"^\\d+-", f"{port}-", host))
+        except (KeyError, ValueError):
+            return None
+    # MonkeyCode preview domains encode the exposed port as the first label.
+    if re.match(r"^\\d+-[a-z0-9-]+\\.monkeycode-ai\\.online$", host, re.I):
+        return "https://" + re.sub(r"^\\d+-", f"{port}-", host) + "/"
+    # For a normal public hostname, a listening port is directly addressable.
+    if host and host not in {"localhost", "127.0.0.1", "::1"}:
+        return f"http://{host}:{port}/"
+    return None
+
+
 def service_status(host_header: str = "") -> list[dict]:
     units = systemd_units()
     discovered = listening_ports()
@@ -415,8 +432,9 @@ def service_status(host_header: str = "") -> list[dict]:
         title = rule.get("name") or item["unit_name"] or item["process"] or f"端口 {item['port']}"
         actions = rule.get("actions", ["restart"] if item["unit"] else [])
         item.update({"key": item_id, "title": title, "detail": rule.get("description") or f"{item['address']} · {item['process'] or '监听进程'}", "actions": actions, "url": rule.get("url"), "ok": True, **process_memory(item["pid"])})
+        item["url"] = service_public_url(host_header, item["port"], item["url"])
         if item["url"]:
-            item["url"] = str(item["url"]).format(host=public_host(host_header), port=item["port"], unit=item["unit"], process=item["process"])
+            item["url"] = item["url"].format(unit=item["unit"], process=item["process"])
         items.append(item)
 
     for rule in rules:

@@ -4,7 +4,33 @@
     "host": "0.0.0.0",
     "port": 8888
   },
-  "services": [],
+  "services": [
+    {
+      "id": "auth-api",
+      "name": "Auth API / 授权管理",
+      "description": "公开授权 API 与 CE 授权后台",
+      "match": {"port": 8787},
+      "url": "https://{preview_host}/",
+      "actions": []
+    },
+    {
+      "id": "ce-x",
+      "name": "CE-X 授权引擎",
+      "description": "内部授权兼容引擎；公开预览仅用于诊断",
+      "match": {"port": 8791},
+      "url": "https://{preview_host}/v1/health",
+      "actions": []
+    },
+    {
+      "id": "jiankong",
+      "name": "服务监控 / 保活中心",
+      "description": "当前实例的服务监控与 Cloudflare 保活管理入口",
+      "match": {"port": 8888},
+      "url": "https://{preview_host}/guardian/",
+      "link_label": "进入保活中心",
+      "actions": []
+    }
+  ],
   "browser": {
     "enabled": true,
     "port": null
