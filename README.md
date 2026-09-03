@@ -26,7 +26,7 @@
 
 - `server.py`：监控与控制 HTTP 服务
 - `jiankong.service`：常驻 user service 定义
-- `control-token`：本机控制令牌
+- `control-token`：本机控制令牌；首次安装默认值为 `1`，也可通过安装器“重新生成令牌”更换为随机值。
 - `jiankong.json`：可提交的默认面板、服务入口与保活策略；安装即有 8888 的保活中心入口，默认保活消息为 `1`、随机区间为 780–840 秒。
 - `jiankong.local.json`：当前服务器的 Worker 地址、Task ID、上游等非默认覆盖配置（运行后生成、权限 600、不会提交）。
 - `guardian.html`：Cloudflare Worker + MonkeyCode 可视化保活管理页

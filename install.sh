@@ -25,6 +25,16 @@ print_token() {
   printf '\n控制令牌（请保存，仅显示本次）：\n%s\n\n' "$(cat "$TOKEN_PATH")"
 }
 
+write_default_token() {
+  mkdir -p "$STATE_DIR"
+  umask 077
+  # Fresh installs use the requested default. It remains local-only (600).
+  printf '1\n' > "$TOKEN_PATH"
+  chmod 600 "$TOKEN_PATH"
+  printf 'token_fingerprint=%s\n' "$(token_fingerprint)" > "$STATE_PATH"
+  print_token
+}
+
 generate_token() {
   mkdir -p "$STATE_DIR"
   umask 077
@@ -39,11 +49,11 @@ PY
 
 ensure_first_use_token() {
   if [[ ! -s "$TOKEN_PATH" ]]; then
-    printf '未发现控制令牌，正在首次生成。\n'
-    generate_token
+    printf '未发现控制令牌，使用默认控制令牌。\n'
+    write_default_token
   elif [[ ! -s "$STATE_PATH" && "$(token_fingerprint)" == "$(repository_token_fingerprint)" ]]; then
-    printf '检测到仓库自带令牌；这是本机首次安装，将生成本机专用新令牌。\n'
-    generate_token
+    printf '检测到仓库自带令牌；这是本机首次安装，将使用默认控制令牌。\n'
+    write_default_token
   elif [[ ! -s "$STATE_PATH" ]]; then
     mkdir -p "$STATE_DIR"
     printf '检测到已有本机令牌；保留现有令牌并建立本机状态标记。\n'
