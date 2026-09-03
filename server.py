@@ -724,9 +724,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
         if asset_path == "/api/guardian/status":
-            if not self.authorized():
-                self.send_json(401, {"error": "需要控制令牌"})
-                return
+            # Status is intentionally read-only and public so the 8888 service
+            # card opens a useful dashboard immediately. All setup, Worker KV
+            # writes, probes and manual keepalives remain token-protected POSTs.
             self.send_json(200, guardian_status())
             return
         if asset_path == "/api/status":
