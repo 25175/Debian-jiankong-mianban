@@ -406,12 +406,8 @@ def service_public_url(host_header: str, port: int, configured_url: str | None =
             return str(configured_url).format(host=host, port=port, preview_host=re.sub(r"^\d+-", f"{port}-", host))
         except (KeyError, ValueError):
             return None
-    # MonkeyCode preview domains encode the exposed port as the first label.
-    if re.match(r"^\d+-[a-z0-9-]+\.monkeycode-ai\.online$", host, re.I):
-        return "https://" + re.sub(r"^\d+-", f"{port}-", host) + "/"
-    # For a normal public hostname, a listening port is directly addressable.
-    if host and host not in {"localhost", "127.0.0.1", "::1"}:
-        return f"http://{host}:{port}/"
+    # A TCP listener alone is not proof of a browser-safe public route.
+    # Only explicitly configured services receive a user-facing entry button.
     return None
 
 
