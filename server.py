@@ -354,6 +354,26 @@ def listening_ports() -> list[dict]:
     return sorted({(x["port"], x["pid"], x["process"]): x for x in ports}.values(), key=lambda x: x["port"])
 
 
+def process_memory(pid: int) -> dict:
+    """Read the resident memory of a discovered local process; never estimate it."""
+    if not pid:
+        return {"rss_bytes": None, "memory_source": "unavailable"}
+    try:
+        values = dict(
+            line.split(":", 1) for line in Path(f"/proc/{pid}/status").read_text().splitlines() if ":" in line
+        )
+        raw = values.get("VmRSS", "").strip().split()
+        if raw and raw[0].isdigit():
+            return {"rss_bytes": int(raw[0]) * 1024, "memory_source": "VmRSS"}
+    except OSError:
+        pass
+    code, output = command("ps", "-o", "rss=", "-p", str(pid))
+    try:
+        return {"rss_bytes": int(output.strip()) * 1024, "memory_source": "ps RSS"} if code == 0 and output.strip().isdigit() else {"rss_bytes": None, "memory_source": "unavailable"}
+    except ValueError:
+        return {"rss_bytes": None, "memory_source": "unavailable"}
+
+
 def port_open(port: int) -> bool:
     try:
         with socket.create_connection(("127.0.0.1", int(port)), timeout=1):
@@ -394,7 +414,7 @@ def service_status(host_header: str = "") -> list[dict]:
         used_ids.add(item_id)
         title = rule.get("name") or item["unit_name"] or item["process"] or f"端口 {item['port']}"
         actions = rule.get("actions", ["restart"] if item["unit"] else [])
-        item.update({"key": item_id, "title": title, "detail": rule.get("description") or f"{item['address']} · {item['process'] or '监听进程'}", "actions": actions, "url": rule.get("url"), "ok": True})
+        item.update({"key": item_id, "title": title, "detail": rule.get("description") or f"{item['address']} · {item['process'] or '监听进程'}", "actions": actions, "url": rule.get("url"), "ok": True, **process_memory(item["pid"])})
         if item["url"]:
             item["url"] = str(item["url"]).format(host=public_host(host_header), port=item["port"], unit=item["unit"], process=item["process"])
         items.append(item)
@@ -407,7 +427,7 @@ def service_status(host_header: str = "") -> list[dict]:
         if not unit:
             continue
         item_id = safe_id(rule.get("id") or unit)
-        items.append({"key": item_id, "title": rule.get("name") or unit_info.get("name") or unit, "detail": rule.get("description") or unit, "state": unit_info.get("state", "inactive"), "ok": False, "port": rule.get("port"), "process": "", "unit": unit, "actions": rule.get("actions", ["start", "restart"]), "url": rule.get("url"), "category": "service"})
+        items.append({"key": item_id, "title": rule.get("name") or unit_info.get("name") or unit, "detail": rule.get("description") or unit, "state": unit_info.get("state", "inactive"), "ok": False, "port": rule.get("port"), "process": "", "unit": unit, "actions": rule.get("actions", ["start", "restart"]), "url": rule.get("url"), "category": "service", **process_memory(int(unit_info.get("pid", 0) or 0))})
 
     browser_port = CONFIG.get("browser", {}).get("port")
     if browser_port is None and CONFIG.get("browser", {}).get("enabled", True):
