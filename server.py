@@ -431,7 +431,7 @@ def service_status(host_header: str = "") -> list[dict]:
         used_ids.add(item_id)
         title = rule.get("name") or item["unit_name"] or item["process"] or f"端口 {item['port']}"
         actions = rule.get("actions", ["restart"] if item["unit"] else [])
-        item.update({"key": item_id, "title": title, "detail": rule.get("description") or f"{item['address']} · {item['process'] or '监听进程'}", "actions": actions, "url": rule.get("url"), "ok": True, **process_memory(item["pid"])})
+        item.update({"key": item_id, "title": title, "detail": rule.get("description") or f"{item['address']} · {item['process'] or '监听进程'}", "actions": actions, "url": rule.get("url"), "link_label": rule.get("link_label"), "ok": True, **process_memory(item["pid"])})
         item["url"] = service_public_url(host_header, item["port"], item["url"])
         if item["url"]:
             item["url"] = item["url"].format(unit=item["unit"], process=item["process"])
