@@ -26,6 +26,7 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 BASE = Path(__file__).resolve().parent
 CONFIG_PATH = BASE / "jiankong.json"
+LOCAL_CONFIG_PATH = BASE / "jiankong.local.json"
 TOKEN_PATH = BASE / "control-token"
 STARTED = time.time()
 CONFIG_DEFAULT = {
@@ -62,11 +63,19 @@ def merge_config(base: dict, override: dict) -> dict:
     return result
 
 
-def load_config() -> dict:
+def json_file(path: Path) -> dict:
     try:
-        return merge_config(CONFIG_DEFAULT, json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
     except (OSError, json.JSONDecodeError):
-        return dict(CONFIG_DEFAULT)
+        return {}
+
+
+def load_config() -> dict:
+    # Repository defaults are safe to update. Per-server overrides stay in a
+    # separate ignored file, so an install/update cannot discard credentials or
+    # the connected MonkeyCode target.
+    return merge_config(merge_config(CONFIG_DEFAULT, json_file(CONFIG_PATH)), json_file(LOCAL_CONFIG_PATH))
 
 
 def atomic_json_write(path: Path, value: dict, mode: int = 0o600) -> None:
@@ -190,9 +199,11 @@ def save_guardian_setup(body: dict) -> dict:
         "worker_config": merge_config(current.get("worker_config", {}), dict(body.get("worker_config") or {})),
     })
     CONFIG = merge_config(CONFIG, {"cloudflare_guardian": next_guardian})
-    persisted = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.exists() else {}
+    # Runtime setup belongs to the ignored per-server override; do not mutate
+    # repository defaults and lose it on a future git update.
+    persisted = json_file(LOCAL_CONFIG_PATH)
     persisted["cloudflare_guardian"] = next_guardian
-    atomic_json_write(CONFIG_PATH, persisted, 0o600)
+    atomic_json_write(LOCAL_CONFIG_PATH, persisted, 0o600)
     password = str(body.get("worker_admin_password") or "").strip()
     if password:
         secret = load_guardian_secrets()

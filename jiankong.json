@@ -47,10 +47,10 @@
   },
   "cloudflare_guardian": {
     "enabled": true,
-    "worker_admin_url": "https://ce.cc0cd.cc.cd/cf-admin/",
+    "worker_admin_url": "",
     "worker_config": {
-      "upstreamOrigin": "https://8787-8aafbe4ff96f3e0e.monkeycode-ai.online",
-      "taskId": "98c42710-fcd6-42bd-8de8-98ec1357acd3",
+      "upstreamOrigin": "",
+      "taskId": "",
       "minSeconds": 780,
       "maxSeconds": 840,
       "keepaliveMessage": "1",
