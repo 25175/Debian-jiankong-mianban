@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import collections
 import glob
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import html
 import http.client
 import json
@@ -186,8 +186,10 @@ def guardian_status() -> dict:
     try:
         code, body = future.result(timeout=22)
         result.update({"http_status": code, "worker": body, "ok": code == 200 and not body.get("error")})
+    except FutureTimeoutError:
+        result.update({"http_status": 504, "ok": False, "worker": {"ok": False, "error": "实时 Worker 状态读取超过 22 秒"}})
     except Exception as exc:
-        result.update({"http_status": 504, "ok": False, "worker": {"ok": False, "error": f"实时 Worker 状态读取超时：{exc}"}})
+        result.update({"http_status": 502, "ok": False, "worker": {"ok": False, "error": f"实时 Worker 状态读取失败：{exc}"}})
     return result
 
 
