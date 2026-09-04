@@ -123,9 +123,6 @@ GUARDIAN_HISTORY: collections.deque = collections.deque(maxlen=80)
 # every status response still obtains fresh remote data before it is returned.
 GUARDIAN_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="guardian")
 GUARDIAN_ACTIONS: dict[str, dict] = {}
-GUARDIAN_HTTP_LOCK = threading.Lock()
-GUARDIAN_HTTP_OPENER = None
-GUARDIAN_HTTP_BASE = ""
 GUARDIAN_SECRET_FIELDS = ("worker_admin_password",)
 ISSUE_TITLE_CACHE: dict[str, str] = {}
 TASK_LOCK = threading.Lock()
@@ -162,22 +159,21 @@ def guardian_request(method: str, endpoint: str, payload: dict | None = None) ->
     # the Worker admin secret over HTTPS. It avoids a login redirect/cookie
     # exchange and returns the real Worker state faster.
     headers = {"User-Agent": "jiankong/1.0", "Accept": "application/json", "X-Jiankong-Sync-Token": password}
-    with GUARDIAN_HTTP_LOCK:
+    try:
+        data = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
+        request = Request(urljoin(base, "guardian-api/" + endpoint.lstrip("/")), data=data, method=method, headers={**headers, **({"Content-Type": "application/json"} if data else {})})
+        with build_opener().open(request, timeout=8) as response:
+            raw = response.read().decode("utf-8", "replace")
+            return response.status, json.loads(raw) if raw else {}
+    except HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
         try:
-            data = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
-            request = Request(urljoin(base, "guardian-api/" + endpoint.lstrip("/")), data=data, method=method, headers={**headers, **({"Content-Type": "application/json"} if data else {})})
-            with build_opener().open(request, timeout=10) as response:
-                raw = response.read().decode("utf-8", "replace")
-                return response.status, json.loads(raw) if raw else {}
-        except HTTPError as exc:
-            raw = exc.read().decode("utf-8", "replace")
-            try:
-                body = json.loads(raw)
-            except json.JSONDecodeError:
-                body = {"error": raw[:500] or f"Worker HTTP {exc.code}"}
-            return exc.code, {"ok": False, **body}
-        except (URLError, OSError, ValueError, json.JSONDecodeError) as exc:
-            return 502, {"ok": False, "error": f"Worker 通信失败：{exc}"}
+            body = json.loads(raw)
+        except json.JSONDecodeError:
+            body = {"error": raw[:500] or f"Worker HTTP {exc.code}"}
+        return exc.code, {"ok": False, **body}
+    except (URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return 502, {"ok": False, "error": f"Worker 通信失败：{exc}"}
 
 
 def guardian_status() -> dict:
