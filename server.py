@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
-from urllib.request import HTTPCookieProcessor, Request, build_opener
+from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
 
 BASE = Path(__file__).resolve().parent
@@ -162,7 +162,9 @@ def guardian_request(method: str, endpoint: str, payload: dict | None = None) ->
     try:
         data = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
         request = Request(urljoin(base, "guardian-api/" + endpoint.lstrip("/")), data=data, method=method, headers={**headers, **({"Content-Type": "application/json"} if data else {})})
-        with build_opener().open(request, timeout=8) as response:
+        # MonkeyCode preview containers may inherit a broken HTTP(S)_PROXY; the
+        # direct Cloudflare route is the intended network path.
+        with build_opener(ProxyHandler({})).open(request, timeout=8) as response:
             raw = response.read().decode("utf-8", "replace")
             return response.status, json.loads(raw) if raw else {}
     except HTTPError as exc:
