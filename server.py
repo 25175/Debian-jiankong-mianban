@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import collections
 import glob
+from concurrent.futures import ThreadPoolExecutor
 import html
 import http.client
 import json
@@ -118,11 +119,10 @@ TASK_CACHE_TTL = 15
 GUARDIAN_SECRET_PATH = BASE / "cloudflare-guardian-secret.json"
 GUARDIAN_LOCK = threading.Lock()
 GUARDIAN_HISTORY: collections.deque = collections.deque(maxlen=80)
-# Status refresh runs outside HTTP request handling. A slow Cloudflare/Worker
-# path must never freeze the 8888 dashboard page or its browser polling.
-GUARDIAN_STATUS_CACHE: dict = {"ready": False, "message": "正在连接 Worker", "history": []}
-GUARDIAN_STATUS_REFRESHING = False
-GUARDIAN_STATUS_UPDATED_AT = 0.0
+# A single bounded executor keeps slow Worker calls off request threads while
+# every status response still obtains fresh remote data before it is returned.
+GUARDIAN_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="guardian")
+GUARDIAN_ACTIONS: dict[str, dict] = {}
 GUARDIAN_SECRET_FIELDS = ("worker_admin_password",)
 ISSUE_TITLE_CACHE: dict[str, str] = {}
 TASK_LOCK = threading.Lock()
@@ -180,38 +180,43 @@ def guardian_request(method: str, endpoint: str, payload: dict | None = None) ->
         return 502, {"ok": False, "error": f"Worker 通信失败：{exc}"}
 
 
-def refresh_guardian_status() -> None:
-    """Perform the potentially slow Worker request in a bounded background thread."""
-    global GUARDIAN_STATUS_REFRESHING, GUARDIAN_STATUS_UPDATED_AT, GUARDIAN_STATUS_CACHE
-    ready, reason = guardian_ready()
-    result = {"ready": ready, "message": reason, "history": list(GUARDIAN_HISTORY)}
-    if ready:
-        code, body = guardian_request("GET", "status")
-        result.update({"http_status": code, "worker": body, "ok": code == 200 and not body.get("error")})
-    with GUARDIAN_LOCK:
-        GUARDIAN_STATUS_CACHE = result
-        GUARDIAN_STATUS_UPDATED_AT = time.time()
-        GUARDIAN_STATUS_REFRESHING = False
-
-
 def guardian_status() -> dict:
-    global GUARDIAN_STATUS_REFRESHING
-    now = time.time()
+    """Read the actual Worker state now; no cached status is substituted."""
+    ready, reason = guardian_ready()
+    result = {"ready": ready, "message": reason, "history": list(GUARDIAN_HISTORY), "fresh": True, "read_at": int(time.time() * 1000)}
+    if not ready:
+        return result
+    future = GUARDIAN_EXECUTOR.submit(guardian_request, "GET", "status")
+    try:
+        code, body = future.result(timeout=22)
+        result.update({"http_status": code, "worker": body, "ok": code == 200 and not body.get("error")})
+    except Exception as exc:
+        result.update({"http_status": 504, "ok": False, "worker": {"ok": False, "error": f"实时 Worker 状态读取超时：{exc}"}})
+    return result
+
+
+def new_guardian_action(kind: str, endpoint: str, payload: dict | None = None) -> dict:
+    action_id = secrets.token_urlsafe(12)
+    now = int(time.time() * 1000)
+    state = {"id": action_id, "kind": kind, "state": "running", "started_at": now, "finished_at": None, "result": None}
     with GUARDIAN_LOCK:
-        cached = dict(GUARDIAN_STATUS_CACHE)
-        # Give the browser immediate local readiness/config status even while
-        # the first remote Worker read is still running.
-        if not GUARDIAN_STATUS_UPDATED_AT:
-            ready, reason = guardian_ready()
-            cached.update({"ready": ready, "message": reason})
-        cached["history"] = list(GUARDIAN_HISTORY)
-        stale = now - GUARDIAN_STATUS_UPDATED_AT >= 10
-        if stale and not GUARDIAN_STATUS_REFRESHING:
-            GUARDIAN_STATUS_REFRESHING = True
-            threading.Thread(target=refresh_guardian_status, daemon=True).start()
-        cached["refreshing"] = GUARDIAN_STATUS_REFRESHING
-        cached["updated_at"] = GUARDIAN_STATUS_UPDATED_AT or None
-    return cached
+        GUARDIAN_ACTIONS[action_id] = state
+
+    def work() -> None:
+        code, response = guardian_request("POST" if endpoint == "trigger" else "GET", endpoint, payload)
+        ok = code == 200 and not response.get("error")
+        with GUARDIAN_LOCK:
+            state.update({"state": "succeeded" if ok else "failed", "finished_at": int(time.time() * 1000), "result": {"ok": ok, "worker_http_status": code, "worker": response}})
+        guardian_event(kind, ok, response.get("error") or ("Worker 已接受请求，正在读取最终状态" if endpoint == "trigger" else "上游实时探测完成"))
+
+    GUARDIAN_EXECUTOR.submit(work)
+    return state
+
+
+def guardian_action(action_id: str) -> dict | None:
+    with GUARDIAN_LOCK:
+        value = GUARDIAN_ACTIONS.get(action_id)
+        return dict(value) if value else None
 
 
 def save_guardian_setup(body: dict) -> dict:
@@ -801,21 +806,22 @@ class Handler(BaseHTTPRequestHandler):
             if not self.authorized():
                 self.send_json(401, {"error": "控制令牌无效"})
                 return
-            code, response = guardian_request("POST", "trigger")
-            # The Worker records Task WebSocket delivery asynchronously; an edge timeout
-            # must remain visible rather than being presented as a successful keepalive.
-            ok = code == 200 and not response.get("error")
-            guardian_event("立即保活", ok, response.get("error") or "已请求 Worker 发送真实 Task 输入")
-            self.send_json(200, {"ok": ok, "worker_http_status": code, "worker": response})
+            action = new_guardian_action("立即保活", "trigger")
+            self.send_json(202, {"ok": True, "action": action, "message": "已提交实时保活；正在等待 Worker 确认"})
             return
         if self.path == "/api/guardian/probe":
             if not self.authorized():
                 self.send_json(401, {"error": "控制令牌无效"})
                 return
-            code, response = guardian_request("GET", "probe")
-            ok = code == 200 and not response.get("error") and bool((response.get("upstream") or {}).get("ok"))
-            guardian_event("上游探测", ok, response.get("error") or f"上游 HTTP {((response.get('upstream') or {}).get('status', '未知'))}")
-            self.send_json(code if code < 500 else 502, {"ok": ok, "worker": response})
+            action = new_guardian_action("上游探测", "probe")
+            self.send_json(202, {"ok": True, "action": action, "message": "已提交实时上游探测"})
+            return
+        if self.path.startswith("/api/guardian/actions/"):
+            if not self.authorized():
+                self.send_json(401, {"error": "控制令牌无效"})
+                return
+            action = guardian_action(self.path.rsplit("/", 1)[-1])
+            self.send_json(200 if action else 404, action or {"error": "操作记录不存在或已过期"})
             return
         if self.path == "/api/browser-session":
             if not self.authorized():
