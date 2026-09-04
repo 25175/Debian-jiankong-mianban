@@ -124,6 +124,16 @@ GUARDIAN_HISTORY: collections.deque = collections.deque(maxlen=80)
 GUARDIAN_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="guardian")
 GUARDIAN_ACTIONS: dict[str, dict] = {}
 GUARDIAN_SECRET_FIELDS = ("worker_admin_password",)
+PLUGIN_DIR = BASE / "plugins"
+PLUGIN_STATE_PATH = BASE / "plugins.local.json"
+BUILTIN_PLUGINS = {
+    "cloudflare-guardian": {
+        "name": "服务监控 / 保活中心",
+        "description": "Cloudflare Worker、MonkeyCode 上游与真实 Task 保活管理",
+        "route": "/guardian/",
+        "port": PORT,
+    }
+}
 ISSUE_TITLE_CACHE: dict[str, str] = {}
 TASK_LOCK = threading.Lock()
 RESOURCE_HISTORY = collections.deque(maxlen=1200)
@@ -251,6 +261,30 @@ def guardian_event(kind: str, ok: bool, message: str) -> None:
         GUARDIAN_HISTORY.appendleft({"at": int(time.time() * 1000), "kind": kind, "ok": ok, "message": message[:300]})
 
 
+def plugin_states() -> dict:
+    saved = json_file(PLUGIN_STATE_PATH)
+    return {key: bool(saved.get(key, False)) for key in BUILTIN_PLUGINS}
+
+
+def plugins(host_header: str = "") -> list[dict]:
+    states = plugin_states()
+    result = []
+    for key, plugin in BUILTIN_PLUGINS.items():
+        enabled = states.get(key, False)
+        url = service_public_url(host_header, int(plugin["port"]), "https://{preview_host}" + plugin["route"]) if enabled else None
+        result.append({"key": key, **plugin, "installed": enabled, "url": url})
+    return result
+
+
+def set_plugin(key: str, installed: bool) -> dict:
+    if key not in BUILTIN_PLUGINS:
+        raise ValueError("未知插件")
+    state = json_file(PLUGIN_STATE_PATH)
+    state[key] = bool(installed)
+    atomic_json_write(PLUGIN_STATE_PATH, state, 0o600)
+    return {"key": key, "installed": state[key]}
+
+
 def _prune_browser_tokens() -> None:
     now = time.time()
     with BROWSER_LOCK:
@@ -352,7 +386,18 @@ def resources() -> dict:
         down = 0.0 if not previous["net"] or dt <= 0 else max(0, (rx - previous["net"][0]) / dt)
         up = 0.0 if not previous["net"] or dt <= 0 else max(0, (tx - previous["net"][1]) / dt)
         RESOURCE_LAST.update({"at": now, "cpu": (total, idle), "net": (rx, tx)})
+        visible_rss = 0
+        try:
+            for status_path in Path("/proc").glob("[0-9]*/status"):
+                for line in status_path.read_text(errors="ignore").splitlines():
+                    if line.startswith("VmRSS:"):
+                        visible_rss += int(line.split()[1]) * 1024
+                        break
+        except (OSError, ValueError):
+            pass
+        unexplained = max(0, mem_used - visible_rss)
         sample = {"t": int(now), "cpu": round(cpu, 1), "memory": round(mem_used / mem_total * 100, 1), "disk": round(disk.used / disk.total * 100, 1), "down": round(down, 1), "up": round(up, 1)}
+        memory_accounting = {"visible_process_rss": visible_rss, "unexplained_used": unexplained, "consistent": unexplained <= max(512 * 1024 * 1024, int(mem_total * 0.15))}
         if not RESOURCE_HISTORY or now - RESOURCE_HISTORY[-1]["t"] >= 2:
             RESOURCE_HISTORY.append(sample)
         recent = [x for x in RESOURCE_HISTORY if now - x["t"] <= 60]
@@ -361,7 +406,7 @@ def resources() -> dict:
     def state(pct: float) -> str:
         return "danger" if pct >= 90 else ("warning" if pct >= 75 else "ok")
 
-    return {"sample": sample, "memory": {"used": mem_used, "total": mem_total, "state": state(sample["memory"])}, "disk": {"used": disk.used, "total": disk.total, "state": state(sample["disk"])}, "cpu": {"state": state(sample["cpu"])}, "network": {"iface": iface, "down": down, "up": up, "state": "ok" if iface else "danger"}, "recent": recent, "hour": hour}
+    return {"sample": sample, "memory": {"used": mem_used, "total": mem_total, "state": state(sample["memory"]), "accounting": memory_accounting}, "disk": {"used": disk.used, "total": disk.total, "state": state(sample["disk"])}, "cpu": {"state": state(sample["cpu"])}, "network": {"iface": iface, "down": down, "up": up, "state": "ok" if iface else "danger"}, "recent": recent, "hour": hour}
 
 
 def systemd_units() -> dict[str, dict]:
@@ -577,13 +622,30 @@ def multica_info() -> dict:
     return {"available": True, "agent_count": len(agents), "running": sum(task["status"] in running_states for task in all_tasks), "recent": all_tasks[:5], "stale": False}
 
 
+def installed_agents() -> list[dict]:
+    """Discover installed agent runtimes on this machine; no fixed UI template."""
+    agents = []
+    codex_bin = shutil.which("codex")
+    codex_dir = Path(CONFIG.get("codex", {}).get("sessions_dir") or (Path.home() / ".codex" / "sessions"))
+    if codex_bin or codex_dir.exists():
+        data = codex_cli()
+        agents.append({"key": "agent-codex", "title": "Codex CLI", "detail": codex_bin or str(codex_dir), "ok": True, "state": data.get("mode", "idle"), "agent_kind": "codex", "agent_data": data, "category": "agent"})
+    multica_bin = CONFIG.get("multica", {}).get("executable") or shutil.which("multica")
+    if multica_bin:
+        data = multica_info()
+        agents.append({"key": "agent-multica", "title": "Multica", "detail": str(multica_bin), "ok": data.get("available", False), "state": "available" if data.get("available") else "inactive", "agent_kind": "multica", "agent_data": data, "category": "agent"})
+    for name, executable in (("Claude Code", "claude"), ("OpenCode", "opencode"), ("Gemini CLI", "gemini"), ("Aider", "aider")):
+        path = shutil.which(executable)
+        running = any(x.get("process") == executable for x in listening_ports())
+        if path or running:
+            agents.append({"key": f"agent-{executable}", "title": name, "detail": path or "检测到运行进程", "ok": True, "state": "running" if running else "installed", "agent_kind": executable, "agent_data": {"running": int(running), "recent": []}, "category": "agent"})
+    return agents
+
+
 def status(host_header: str = "") -> dict:
     items = service_status(host_header)
-    codex = codex_cli()
-    items.insert(0, {"key": "codex_cli", "title": "Codex CLI", "detail": "当前用户的本地 Codex CLI 会话", "ok": True, "state": codex["mode"], "port": None, "actions": [], "url": None, "codex": codex, "category": "meta"})
-    tasks = multica_info()
-    items.insert(1, {"key": "agent_tasks", "title": "Multica 编排任务", "detail": "自动发现的 Multica 任务来源", "ok": tasks.get("available", False), "state": "available" if tasks.get("available") else "inactive", "port": None, "actions": [], "url": None, "tasks": tasks, "category": "meta"})
-    return {"dashboard_name": CONFIG.get("name", "Debian 服务监控面板"), "generated_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"), "host": socket.gethostname(), "monitor_port": PORT, "all_ok": all(x["ok"] for x in items), "items": items, "uptime_seconds": int(time.time() - STARTED), "resources": resources()}
+    agents = installed_agents()
+    return {"dashboard_name": CONFIG.get("name", "Debian 服务监控面板"), "generated_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"), "host": socket.gethostname(), "monitor_port": PORT, "all_ok": all(x["ok"] for x in items), "items": items, "agents": agents, "plugins": plugins(host_header), "uptime_seconds": int(time.time() - STARTED), "resources": resources()}
 
 
 def allowed_action(target: str, action: str) -> tuple[bool, str]:
@@ -601,9 +663,38 @@ def allowed_action(target: str, action: str) -> tuple[bool, str]:
 def logs(target: str) -> tuple[bool, str]:
     with SERVICE_LOCK:
         item = dict(SERVICE_TARGETS.get(target, {}))
-    if not item or not item.get("unit"):
-        return False, "该目标没有关联的 systemd user service"
-    return True, command("journalctl", "--user", "-u", item["unit"], "-n", "60", "--no-pager")[1]
+    if not item:
+        return False, "目标不存在或状态尚未扫描完成"
+    unit = item.get("unit")
+    if unit:
+        code, output = command("journalctl", "--user", "-u", unit, "-n", "60", "--no-pager")
+        if code == 0 and output:
+            return True, output
+    pid = int(item.get("pid") or 0)
+    if pid:
+        candidates = [
+            BASE / "jiankong.log" if item.get("port") == PORT else None,
+            BASE.parent / "auth-api" / "auth-api.log" if item.get("port") == 8787 else None,
+            BASE.parent / "Keygen-CE" / "keygen-compat.log" if item.get("port") == 8791 else None,
+            Path(f"/proc/{pid}/fd/1"),
+            Path(f"/proc/{pid}/fd/2"),
+        ]
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            try:
+                if candidate.is_file() or str(candidate).startswith("/proc/"):
+                    code, output = command("tail", "-n", "60", str(candidate), timeout=5)
+                    if code == 0 and output:
+                        return True, output
+            except OSError:
+                continue
+        try:
+            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+        except OSError:
+            cmdline = item.get("process") or "未知进程"
+        return True, f"该进程未接入 systemd/journald，且未发现可读日志文件。\nPID: {pid}\n命令: {cmdline}\nRSS: {process_memory(pid).get('rss_bytes') or 0} bytes"
+    return False, "该目标没有关联的 systemd 服务、PID 或日志文件"
 
 
 PAGE = (BASE / "index.html").read_text(encoding="utf-8")
@@ -822,6 +913,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             action = guardian_action(self.path.rsplit("/", 1)[-1])
             self.send_json(200 if action else 404, action or {"error": "操作记录不存在或已过期"})
+            return
+        if self.path == "/api/plugins/toggle":
+            if not self.authorized():
+                self.send_json(401, {"error": "控制令牌无效"})
+                return
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+                self.send_json(200, {"ok": True, "plugin": set_plugin(str(body.get("key", "")), bool(body.get("installed")))})
+            except (ValueError, OSError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
             return
         if self.path == "/api/browser-session":
             if not self.authorized():

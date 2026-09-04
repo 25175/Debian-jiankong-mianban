@@ -1,6 +1,7 @@
 control-token
 cloudflare-guardian-secret.json
 jiankong.local.json
+plugins.local.json
 *.tmp
 __pycache__/
 *.pyc

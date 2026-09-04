@@ -20,15 +20,6 @@
       "match": {"port": 8791},
       "url": "https://{preview_host}/v1/health",
       "actions": []
-    },
-    {
-      "id": "jiankong",
-      "name": "服务监控 / 保活中心",
-      "description": "当前实例的服务监控与 Cloudflare 保活管理入口",
-      "match": {"port": 8888},
-      "url": "https://{preview_host}/guardian/",
-      "link_label": "进入保活中心",
-      "actions": []
     }
   ],
   "browser": {
