@@ -121,8 +121,11 @@ GUARDIAN_LOCK = threading.Lock()
 GUARDIAN_HISTORY: collections.deque = collections.deque(maxlen=80)
 # A single bounded executor keeps slow Worker calls off request threads while
 # every status response still obtains fresh remote data before it is returned.
-GUARDIAN_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="guardian")
+GUARDIAN_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="guardian")
 GUARDIAN_ACTIONS: dict[str, dict] = {}
+GUARDIAN_HTTP_LOCK = threading.Lock()
+GUARDIAN_HTTP_OPENER = None
+GUARDIAN_HTTP_BASE = ""
 GUARDIAN_SECRET_FIELDS = ("worker_admin_password",)
 ISSUE_TITLE_CACHE: dict[str, str] = {}
 TASK_LOCK = threading.Lock()
@@ -146,38 +149,39 @@ def command(*args: str, timeout: int = 8, cwd: str | None = None) -> tuple[int, 
 
 
 def guardian_request(method: str, endpoint: str, payload: dict | None = None) -> tuple[int, dict]:
+    """Use one authenticated Worker session; never login before every status read."""
+    global GUARDIAN_HTTP_OPENER, GUARDIAN_HTTP_BASE
     ready, reason = guardian_ready()
     if not ready:
         return 503, {"ok": False, "error": reason}
     cfg, secrets_data = guardian_config(), load_guardian_secrets()
     configured = str(cfg["worker_admin_url"]).rstrip("/")
-    base = configured if configured.endswith("/cf-admin") else configured + "/cf-admin"
-    base += "/"
-    jar = CookieJar()
-    opener = build_opener(HTTPCookieProcessor(jar))
+    base = (configured if configured.endswith("/cf-admin") else configured + "/cf-admin") + "/"
     password = str(secrets_data["worker_admin_password"])
-    try:
-        browser_headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140 Safari/537.36", "Accept": "application/json,text/plain,*/*"}
-        login = Request(urljoin(base, "login"), data=urlencode({"password": password}).encode(), method="POST", headers={**browser_headers, "Content-Type": "application/x-www-form-urlencoded"})
-        with opener.open(login, timeout=12) as response:
-            if response.geturl().rstrip("/") != base.rstrip("/"):
-                return 401, {"ok": False, "error": "Worker 管理密码无效"}
-        url = urljoin(base, "guardian-api/" + endpoint.lstrip("/"))
-        data = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
-        request = Request(url, data=data, method=method, headers={**browser_headers, **({"Content-Type": "application/json"} if data else {})})
-        with opener.open(request, timeout=20) as response:
-            raw = response.read().decode("utf-8", "replace")
-            body = json.loads(raw) if raw else {}
-            return response.status, body
-    except HTTPError as exc:
-        raw = exc.read().decode("utf-8", "replace")
+    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140 Safari/537.36", "Accept": "application/json,text/plain,*/*"}
+    with GUARDIAN_HTTP_LOCK:
         try:
-            body = json.loads(raw)
-        except json.JSONDecodeError:
-            body = {"error": raw[:500] or f"Worker HTTP {exc.code}"}
-        return exc.code, {"ok": False, **body}
-    except (URLError, OSError, ValueError, json.JSONDecodeError) as exc:
-        return 502, {"ok": False, "error": f"Worker 通信失败：{exc}"}
+            if GUARDIAN_HTTP_OPENER is None or GUARDIAN_HTTP_BASE != base:
+                opener = build_opener(HTTPCookieProcessor(CookieJar()))
+                login = Request(urljoin(base, "login"), data=urlencode({"password": password}).encode(), method="POST", headers={**headers, "Content-Type": "application/x-www-form-urlencoded"})
+                with opener.open(login, timeout=8) as response:
+                    if response.geturl().rstrip("/") != base.rstrip("/"):
+                        return 401, {"ok": False, "error": "Worker 管理密码无效"}
+                GUARDIAN_HTTP_OPENER, GUARDIAN_HTTP_BASE = opener, base
+            data = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
+            request = Request(urljoin(base, "guardian-api/" + endpoint.lstrip("/")), data=data, method=method, headers={**headers, **({"Content-Type": "application/json"} if data else {})})
+            with GUARDIAN_HTTP_OPENER.open(request, timeout=10) as response:
+                raw = response.read().decode("utf-8", "replace")
+                return response.status, json.loads(raw) if raw else {}
+        except HTTPError as exc:
+            raw = exc.read().decode("utf-8", "replace")
+            try:
+                body = json.loads(raw)
+            except json.JSONDecodeError:
+                body = {"error": raw[:500] or f"Worker HTTP {exc.code}"}
+            return exc.code, {"ok": False, **body}
+        except (URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+            return 502, {"ok": False, "error": f"Worker 通信失败：{exc}"}
 
 
 def guardian_status() -> dict:
