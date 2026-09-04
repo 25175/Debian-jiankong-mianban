@@ -199,6 +199,11 @@ def guardian_status() -> dict:
     now = time.time()
     with GUARDIAN_LOCK:
         cached = dict(GUARDIAN_STATUS_CACHE)
+        # Give the browser immediate local readiness/config status even while
+        # the first remote Worker read is still running.
+        if not GUARDIAN_STATUS_UPDATED_AT:
+            ready, reason = guardian_ready()
+            cached.update({"ready": ready, "message": reason})
         cached["history"] = list(GUARDIAN_HISTORY)
         stale = now - GUARDIAN_STATUS_UPDATED_AT >= 10
         if stale and not GUARDIAN_STATUS_REFRESHING:
