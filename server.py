@@ -158,19 +158,15 @@ def guardian_request(method: str, endpoint: str, payload: dict | None = None) ->
     configured = str(cfg["worker_admin_url"]).rstrip("/")
     base = (configured if configured.endswith("/cf-admin") else configured + "/cf-admin") + "/"
     password = str(secrets_data["worker_admin_password"])
-    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140 Safari/537.36", "Accept": "application/json,text/plain,*/*"}
+    # Service-to-service synchronization authenticates once per request using
+    # the Worker admin secret over HTTPS. It avoids a login redirect/cookie
+    # exchange and returns the real Worker state faster.
+    headers = {"User-Agent": "jiankong/1.0", "Accept": "application/json", "X-Jiankong-Sync-Token": password}
     with GUARDIAN_HTTP_LOCK:
         try:
-            if GUARDIAN_HTTP_OPENER is None or GUARDIAN_HTTP_BASE != base:
-                opener = build_opener(HTTPCookieProcessor(CookieJar()))
-                login = Request(urljoin(base, "login"), data=urlencode({"password": password}).encode(), method="POST", headers={**headers, "Content-Type": "application/x-www-form-urlencoded"})
-                with opener.open(login, timeout=8) as response:
-                    if response.geturl().rstrip("/") != base.rstrip("/"):
-                        return 401, {"ok": False, "error": "Worker 管理密码无效"}
-                GUARDIAN_HTTP_OPENER, GUARDIAN_HTTP_BASE = opener, base
             data = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
             request = Request(urljoin(base, "guardian-api/" + endpoint.lstrip("/")), data=data, method=method, headers={**headers, **({"Content-Type": "application/json"} if data else {})})
-            with GUARDIAN_HTTP_OPENER.open(request, timeout=10) as response:
+            with build_opener().open(request, timeout=10) as response:
                 raw = response.read().decode("utf-8", "replace")
                 return response.status, json.loads(raw) if raw else {}
         except HTTPError as exc:
