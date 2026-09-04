@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import collections
 import glob
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from concurrent.futures import ThreadPoolExecutor
 import html
 import http.client
 import json
@@ -184,12 +184,12 @@ def guardian_status() -> dict:
     result = {"ready": ready, "message": reason, "history": list(GUARDIAN_HISTORY), "fresh": True, "read_at": int(time.time() * 1000)}
     if not ready:
         return result
-    future = GUARDIAN_EXECUTOR.submit(guardian_request, "GET", "status")
     try:
-        code, body = future.result(timeout=22)
+        # ThreadingHTTPServer already isolates concurrent browser requests. Do
+        # the fresh Worker request directly so manual actions cannot starve the
+        # status lane in a shared executor queue.
+        code, body = guardian_request("GET", "status")
         result.update({"http_status": code, "worker": body, "ok": code == 200 and not body.get("error")})
-    except FutureTimeoutError:
-        result.update({"http_status": 504, "ok": False, "worker": {"ok": False, "error": "实时 Worker 状态读取超过 22 秒"}})
     except Exception as exc:
         result.update({"http_status": 502, "ok": False, "worker": {"ok": False, "error": f"实时 Worker 状态读取失败：{exc}"}})
     return result
