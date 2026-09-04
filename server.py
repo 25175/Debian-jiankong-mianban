@@ -118,6 +118,11 @@ TASK_CACHE_TTL = 15
 GUARDIAN_SECRET_PATH = BASE / "cloudflare-guardian-secret.json"
 GUARDIAN_LOCK = threading.Lock()
 GUARDIAN_HISTORY: collections.deque = collections.deque(maxlen=80)
+# Status refresh runs outside HTTP request handling. A slow Cloudflare/Worker
+# path must never freeze the 8888 dashboard page or its browser polling.
+GUARDIAN_STATUS_CACHE: dict = {"ready": False, "message": "正在连接 Worker", "history": []}
+GUARDIAN_STATUS_REFRESHING = False
+GUARDIAN_STATUS_UPDATED_AT = 0.0
 GUARDIAN_SECRET_FIELDS = ("worker_admin_password",)
 ISSUE_TITLE_CACHE: dict[str, str] = {}
 TASK_LOCK = threading.Lock()
@@ -175,14 +180,33 @@ def guardian_request(method: str, endpoint: str, payload: dict | None = None) ->
         return 502, {"ok": False, "error": f"Worker 通信失败：{exc}"}
 
 
-def guardian_status() -> dict:
+def refresh_guardian_status() -> None:
+    """Perform the potentially slow Worker request in a bounded background thread."""
+    global GUARDIAN_STATUS_REFRESHING, GUARDIAN_STATUS_UPDATED_AT, GUARDIAN_STATUS_CACHE
     ready, reason = guardian_ready()
     result = {"ready": ready, "message": reason, "history": list(GUARDIAN_HISTORY)}
-    if not ready:
-        return result
-    code, body = guardian_request("GET", "status")
-    result.update({"http_status": code, "worker": body, "ok": code == 200 and not body.get("error")})
-    return result
+    if ready:
+        code, body = guardian_request("GET", "status")
+        result.update({"http_status": code, "worker": body, "ok": code == 200 and not body.get("error")})
+    with GUARDIAN_LOCK:
+        GUARDIAN_STATUS_CACHE = result
+        GUARDIAN_STATUS_UPDATED_AT = time.time()
+        GUARDIAN_STATUS_REFRESHING = False
+
+
+def guardian_status() -> dict:
+    global GUARDIAN_STATUS_REFRESHING
+    now = time.time()
+    with GUARDIAN_LOCK:
+        cached = dict(GUARDIAN_STATUS_CACHE)
+        cached["history"] = list(GUARDIAN_HISTORY)
+        stale = now - GUARDIAN_STATUS_UPDATED_AT >= 10
+        if stale and not GUARDIAN_STATUS_REFRESHING:
+            GUARDIAN_STATUS_REFRESHING = True
+            threading.Thread(target=refresh_guardian_status, daemon=True).start()
+        cached["refreshing"] = GUARDIAN_STATUS_REFRESHING
+        cached["updated_at"] = GUARDIAN_STATUS_UPDATED_AT or None
+    return cached
 
 
 def save_guardian_setup(body: dict) -> dict:
