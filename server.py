@@ -214,10 +214,10 @@ def new_guardian_action(kind: str, endpoint: str, payload: dict | None = None) -
 
     def work() -> None:
         code, response = guardian_request("POST" if endpoint == "trigger" else "GET", endpoint, payload)
-        ok = code == 200 and not response.get("error")
+        ok = code in (200, 202) and not response.get("error")
         with GUARDIAN_LOCK:
             state.update({"state": "succeeded" if ok else "failed", "finished_at": int(time.time() * 1000), "result": {"ok": ok, "worker_http_status": code, "worker": response}})
-        guardian_event(kind, ok, response.get("error") or ("Worker 已接受请求，正在读取最终状态" if endpoint == "trigger" else "上游实时探测完成"))
+        guardian_event(kind, ok, response.get("error") or ("Worker 已确认任务" if endpoint == "trigger" else "上游实时探测完成"))
 
     GUARDIAN_EXECUTOR.submit(work)
     return state
