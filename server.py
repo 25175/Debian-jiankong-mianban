@@ -126,6 +126,8 @@ GUARDIAN_ACTIONS: dict[str, dict] = {}
 GUARDIAN_SECRET_FIELDS = ("worker_admin_password",)
 PLUGIN_DIR = BASE / "plugins"
 PLUGIN_STATE_PATH = BASE / "plugins.local.json"
+LOGIN_BROWSER_SCRIPT = BASE / "monkeycode_browser.py"
+LOGIN_BROWSER_PORT = 6080
 BUILTIN_PLUGINS = {
     "cloudflare-guardian": {
         "name": "服务监控 / 保活中心",
@@ -293,6 +295,22 @@ def set_plugin(key: str, installed: bool) -> dict:
     state[key] = bool(installed)
     atomic_json_write(PLUGIN_STATE_PATH, state, 0o600)
     return {"key": key, "installed": state[key]}
+
+
+def login_browser_run(action: str) -> dict:
+    if not LOGIN_BROWSER_SCRIPT.exists():
+        raise RuntimeError("登录浏览器组件未安装")
+    code, output = command("python3", str(LOGIN_BROWSER_SCRIPT), action, timeout=15)
+    if code != 0:
+        raise RuntimeError(output or "登录浏览器启动失败")
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"登录浏览器返回格式无效：{output[:200]}") from exc
+
+
+def login_browser_url(host_header: str) -> str | None:
+    return service_public_url(host_header, LOGIN_BROWSER_PORT, "https://{preview_host}/vnc.html?autoconnect=true&resize=remote")
 
 
 def _prune_browser_tokens() -> None:
@@ -858,6 +876,15 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if asset_path == "/api/login-browser/status":
+            if not self.authorized():
+                self.send_json(401, {"error": "需要控制令牌"})
+                return
+            try:
+                self.send_json(200, {"browser": login_browser_run("status"), "url": login_browser_url(self.headers.get("Host", ""))})
+            except RuntimeError as exc:
+                self.send_json(503, {"error": str(exc)})
+            return
         if asset_path == "/api/guardian/status":
             # Status is intentionally read-only and public so the 8888 service
             # card opens a useful dashboard immediately. All setup, Worker KV
@@ -902,6 +929,27 @@ class Handler(BaseHTTPRequestHandler):
             ok = code == 200 and not response.get("error")
             guardian_event("应用配置", ok, response.get("error") or "Worker 配置已写入 KV 并立即生效")
             self.send_json(code if code < 500 else 502, {"ok": ok, "worker": response})
+            return
+        if self.path == "/api/login-browser/start":
+            if not self.authorized():
+                self.send_json(401, {"error": "控制令牌无效"})
+                return
+            try:
+                browser = login_browser_run("start")
+                self.send_json(200, {"browser": browser, "url": login_browser_url(self.headers.get("Host", ""))})
+            except RuntimeError as exc:
+                self.send_json(503, {"error": str(exc)})
+            return
+        if self.path == "/api/login-browser/sync":
+            if not self.authorized():
+                self.send_json(401, {"error": "控制令牌无效"})
+                return
+            try:
+                browser_cookie = login_browser_run("cookie")
+                code, response = guardian_request("POST", "credential", {"cookie": browser_cookie["cookie"], "expiresAt": browser_cookie.get("expiresAt")})
+                self.send_json(code, {"ok": code == 200 and bool(response.get("ok")), "browser": {"expiresAt": browser_cookie.get("expiresAt")}, "worker": response})
+            except RuntimeError as exc:
+                self.send_json(503, {"error": str(exc)})
             return
         if self.path == "/api/guardian/credential":
             if not self.authorized():
