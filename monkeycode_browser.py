@@ -165,6 +165,14 @@ def monkeycode_page() -> dict:
     return page
 
 
+def browser_page() -> dict:
+    """Return a VM Chromium page even when it is still on about:blank."""
+    page = next((p for p in pages() if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
+    if not page:
+        raise RuntimeError("登录浏览器未创建可用页面；请稍后重试")
+    return page
+
+
 def github_login_url() -> dict:
     """Drive the already-isolated VM browser to MonkeyCode's GitHub OAuth URL.
 
@@ -173,7 +181,9 @@ def github_login_url() -> dict:
     the session whose Cookie is later polled and synchronized by jiankong.
     """
     start()
-    page = monkeycode_page()
+    # A newly created Chromium profile can initially expose only about:blank;
+    # navigate that real page before requiring a MonkeyCode URL to exist.
+    page = browser_page()
     cdp(page, "Page.navigate", {"url": TARGET})
     script = """(() => {
       const text = e => (e.innerText || e.textContent || '').trim();
