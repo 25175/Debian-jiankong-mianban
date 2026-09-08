@@ -174,17 +174,14 @@ def browser_page() -> dict:
 
 
 def github_login_url() -> dict:
-    """Drive the already-isolated VM browser to MonkeyCode's GitHub OAuth URL.
+    """Capture the real GitHub OAuth navigation through the VM DevTools protocol.
 
-    The returned URL is intentionally short-lived OAuth state, not a Cookie.
-    GitHub authorization happens on the user's phone; the VM browser remains
-    the session whose Cookie is later polled and synchronized by jiankong.
+    Navigation and URL discovery are CDP Network events, not VNC pixels or a
+    guessed OAuth endpoint. Runtime.evaluate is limited to choosing the real
+    provider controls rendered by MonkeyCode's current login page.
     """
     start()
-    # A newly created Chromium profile can initially expose only about:blank;
-    # navigate that real page before requiring a MonkeyCode URL to exist.
     page = browser_page()
-    cdp(page, "Page.navigate", {"url": TARGET})
     script = """(() => {
       const text = e => (e.innerText || e.textContent || '').trim();
       const clickText = needle => {
@@ -201,21 +198,51 @@ def github_login_url() -> dict:
       if (github) { github.click(); return 'clicked-github'; }
       return 'waiting-github';
     })()"""
-    deadline = time.time() + 15
-    last_url = ""
-    while time.time() < deadline:
-        try:
-            page = monkeycode_page()
-            cdp(page, "Runtime.evaluate", {"expression": script, "awaitPromise": True})
-        except RuntimeError:
-            pass
-        time.sleep(1)
-        for candidate in pages():
-            url = str(candidate.get("url") or "")
-            if "github.com/login" in url and "client_id=" in url:
-                return {"url": url, "expiresAt": int((time.time() + 300) * 1000)}
-            last_url = url or last_url
-    raise RuntimeError("未能从 MonkeyCode 登录页取得 GitHub 授权链接；请检查百智云登录页是否已加载（当前页：%s）" % (last_url[:200] or "未知"))
+    ws = websocket.create_connection(page["webSocketDebuggerUrl"], suppress_origin=True, timeout=8)
+    try:
+        next_id = 0
+
+        def send(method: str, params: dict | None = None) -> int:
+            nonlocal next_id
+            next_id += 1
+            ws.send(json.dumps({"id": next_id, "method": method, "params": params or {}}))
+            return next_id
+
+        def github_url(event: dict) -> str:
+            request = event.get("params", {}).get("request", {})
+            url = str(request.get("url") or "")
+            return url if "github.com/login" in url and "client_id=" in url else ""
+
+        send("Network.enable")
+        send("Page.enable")
+        send("Page.navigate", {"url": TARGET})
+        deadline = time.time() + 20
+        next_click = time.time() + 1
+        last_url = ""
+        while time.time() < deadline:
+            if time.time() >= next_click:
+                send("Runtime.evaluate", {"expression": script, "awaitPromise": True})
+                next_click = time.time() + 1
+            try:
+                event = json.loads(ws.recv())
+            except websocket.WebSocketTimeoutException:
+                continue
+            if event.get("method") == "Network.requestWillBeSent":
+                url = github_url(event)
+                if url:
+                    return {"url": url, "expiresAt": int((time.time() + 300) * 1000), "source": "vm-cdp-network"}
+            if event.get("method") == "Page.frameNavigated":
+                last_url = str(event.get("params", {}).get("frame", {}).get("url") or last_url)
+            # GitHub may be opened in a new tab; keep the page-list fallback
+            # only as a readback of Chromium's actual navigation, never a URL guess.
+            for candidate in pages():
+                url = str(candidate.get("url") or "")
+                if "github.com/login" in url and "client_id=" in url:
+                    return {"url": url, "expiresAt": int((time.time() + 300) * 1000), "source": "vm-cdp-page"}
+                last_url = url or last_url
+    finally:
+        ws.close()
+    raise RuntimeError("未从 VM Chromium 的真实 Network 导航中捕获 GitHub OAuth 链接（当前页：%s）" % (last_url[:200] or "未知"))
 
 
 def cookie() -> dict:
