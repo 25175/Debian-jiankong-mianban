@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -26,6 +27,8 @@ PORT = 6080
 VNC = 5900
 CDP = 9223
 TARGET = "https://monkeycode-ai.com/console/tasks"
+VNC_PASSWORD = "1"
+REQUIRED_COMMANDS = ("Xvfb", "fluxbox", "x11vnc", "websockify", "chromium")
 
 
 def pid_path(name: str) -> Path:
@@ -47,19 +50,67 @@ def spawn(name: str, args: list[str], env: dict[str, str] | None = None) -> None
     pid_path(name).write_text(str(proc.pid))
 
 
-def vnc_auth_file() -> Path:
-    token_file = BASE / "control-token"
-    token = token_file.read_text(encoding="utf-8").strip()
-    if not token:
-        raise RuntimeError("控制令牌为空，无法保护登录浏览器")
+def missing_dependencies() -> list[str]:
+    return [name for name in REQUIRED_COMMANDS if not shutil.which(name)]
+
+
+def install_dependencies() -> dict:
+    missing = missing_dependencies()
+    if not missing:
+        return {"installed": True, "changed": False, "message": "VM 登录浏览器运行环境已安装"}
+    apt = shutil.which("apt-get")
+    if not apt:
+        raise RuntimeError("当前系统缺少 apt-get，无法自动安装 VM 登录浏览器组件：" + ", ".join(missing))
+    # Debian packages give a compatible Chromium/Xvfb/noVNC stack. No external
+    # download mirror is used, so it works through the VM's normal domestic or
+    # international apt mirror configuration.
+    packages = ["chromium", "xvfb", "fluxbox", "x11vnc", "novnc", "websockify", "fonts-noto-cjk"]
+    env = os.environ.copy()
+    env["DEBIAN_FRONTEND"] = "noninteractive"
+    proc = subprocess.run([apt, "update"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=300)
+    if proc.returncode:
+        raise RuntimeError("刷新系统软件源失败：" + proc.stdout[-800:])
+    proc = subprocess.run([apt, "install", "-y", "--no-install-recommends", *packages], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=900)
+    if proc.returncode:
+        raise RuntimeError("安装 VM 登录浏览器组件失败：" + proc.stdout[-1200:])
+    missing = missing_dependencies()
+    if missing:
+        raise RuntimeError("安装完成但仍缺少组件：" + ", ".join(missing))
+    return {"installed": True, "changed": True, "message": "已安装 Chromium、中文字体、Xvfb、x11vnc 与 noVNC"}
+
+
+def vnc_auth_file() -> tuple[Path, bool]:
     auth = RUN / "vnc.pass"
-    if not auth.exists():
-        subprocess.run(["x11vnc", "-storepasswd", token, str(auth)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    desired = RUN / "vnc.pass.version"
+    # VNC password is intentionally independent of the jiankong control token.
+    # This stable default is part of the plugin contract: password = 1.
+    needs_write = not auth.exists() or not desired.exists() or desired.read_text(encoding="utf-8").strip() != VNC_PASSWORD
+    if needs_write:
+        auth.unlink(missing_ok=True)
+        subprocess.run(["x11vnc", "-storepasswd", VNC_PASSWORD, str(auth)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        desired.write_text(VNC_PASSWORD, encoding="utf-8")
         os.chmod(auth, 0o600)
-    return auth
+    return auth, needs_write
+
+
+def stop_process(name: str) -> None:
+    path = pid_path(name)
+    if alive(path):
+        try:
+            os.kill(int(path.read_text().strip()), 15)
+        except (OSError, ValueError):
+            pass
+        for _ in range(20):
+            if not alive(path):
+                break
+            time.sleep(0.1)
+    path.unlink(missing_ok=True)
 
 
 def start() -> dict:
+    missing = missing_dependencies()
+    if missing:
+        raise RuntimeError("VM 登录浏览器插件尚未安装：" + ", ".join(missing))
     DATA.mkdir(parents=True, exist_ok=True)
     PROFILE.mkdir(parents=True, exist_ok=True)
     RUN.mkdir(parents=True, exist_ok=True)
@@ -70,9 +121,14 @@ def start() -> dict:
         with LOG.open("ab") as log:
             proc = subprocess.Popen(["fluxbox"], env=env, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
         pid_path("fluxbox").write_text(str(proc.pid))
+    auth, password_changed = vnc_auth_file()
+    if password_changed:
+        # x11vnc reads its password file only at startup; restart it so a
+        # migration from an older control-token password takes effect now.
+        stop_process("vnc")
     if not alive(pid_path("vnc")):
         with LOG.open("ab") as log:
-            proc = subprocess.Popen(["x11vnc", "-display", ":99", "-forever", "-shared", "-rfbauth", str(vnc_auth_file()), "-localhost", "-rfbport", str(VNC)], stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+            proc = subprocess.Popen(["x11vnc", "-display", ":99", "-forever", "-shared", "-rfbauth", str(auth), "-localhost", "-rfbport", str(VNC)], stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
         pid_path("vnc").write_text(str(proc.pid))
     spawn("novnc", ["websockify", "--web", "/usr/share/novnc", str(PORT), f"localhost:{VNC}"])
     if not alive(pid_path("chromium")):
@@ -82,7 +138,8 @@ def start() -> dict:
 
 
 def status() -> dict:
-    return {"running": alive(pid_path("chromium")), "vnc": alive(pid_path("vnc")), "web": alive(pid_path("novnc")), "port": PORT, "cdp": CDP}
+    missing = missing_dependencies()
+    return {"installed": not missing, "missing": missing, "running": alive(pid_path("chromium")), "vnc": alive(pid_path("vnc")), "web": alive(pid_path("novnc")), "port": PORT, "cdp": CDP, "vnc_password_hint": "1"}
 
 
 def cookie() -> dict:
@@ -119,7 +176,9 @@ def restart() -> dict:
 
 if __name__ == "__main__":
     action = sys.argv[1] if len(sys.argv) > 1 else "status"
-    if action == "start":
+    if action == "install":
+        print(json.dumps(install_dependencies(), ensure_ascii=False))
+    elif action == "start":
         print(json.dumps(start(), ensure_ascii=False))
     elif action == "restart":
         print(json.dumps(restart(), ensure_ascii=False))
@@ -129,4 +188,4 @@ if __name__ == "__main__":
         # Never print cookie outside an authenticated server-side caller.
         print(json.dumps(cookie(), ensure_ascii=False))
     else:
-        raise SystemExit("usage: monkeycode_browser.py [start|restart|status|cookie]")
+        raise SystemExit("usage: monkeycode_browser.py [install|start|restart|status|cookie]")

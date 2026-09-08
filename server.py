@@ -134,7 +134,14 @@ BUILTIN_PLUGINS = {
         "description": "Cloudflare Worker、MonkeyCode 上游与真实 Task 保活管理",
         "route": "/guardian/",
         "port": PORT,
-    }
+    },
+    "monkeycode-login-browser": {
+        "name": "MonkeyCode 登录浏览器",
+        "description": "一键安装 Chromium、中文字体、Xvfb、受控 VNC/noVNC；用于登录后自动同步 Cookie",
+        "route": "/guardian/",
+        "port": PORT,
+        "installable": True,
+    },
 }
 ISSUE_TITLE_CACHE: dict[str, str] = {}
 TASK_LOCK = threading.Lock()
@@ -282,15 +289,32 @@ def plugins(host_header: str = "") -> list[dict]:
     states = plugin_states()
     result = []
     for key, plugin in BUILTIN_PLUGINS.items():
-        enabled = states.get(key, False)
-        url = service_public_url(host_header, int(plugin["port"]), "https://{preview_host}" + plugin["route"]) if enabled else None
-        result.append({"key": key, **plugin, "installed": enabled, "url": url})
+        installed = states.get(key, False)
+        runtime = {}
+        if key == "monkeycode-login-browser":
+            try:
+                runtime = login_browser_run("status")
+            except RuntimeError as exc:
+                runtime = {"installed": False, "error": str(exc)}
+            installed = bool(runtime.get("installed"))
+        url = service_public_url(host_header, int(plugin["port"]), "https://{preview_host}" + plugin["route"]) if installed else None
+        result.append({"key": key, **plugin, "installed": installed, "enabled": states.get(key, False), "url": url, "runtime": runtime})
     return result
 
 
 def set_plugin(key: str, installed: bool) -> dict:
     if key not in BUILTIN_PLUGINS:
         raise ValueError("未知插件")
+    if key == "monkeycode-login-browser":
+        if not installed:
+            raise ValueError("登录浏览器含本地持久化登录数据，不能在网页中卸载；可停止服务或删除当前 VM 的项目目录")
+        install_result = login_browser_run("install")
+        runtime = login_browser_run("start")
+        runtime["install"] = install_result
+        state = json_file(PLUGIN_STATE_PATH)
+        state[key] = True
+        atomic_json_write(PLUGIN_STATE_PATH, state, 0o600)
+        return {"key": key, "installed": True, "runtime": runtime}
     state = json_file(PLUGIN_STATE_PATH)
     state[key] = bool(installed)
     atomic_json_write(PLUGIN_STATE_PATH, state, 0o600)

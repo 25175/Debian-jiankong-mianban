@@ -60,9 +60,16 @@ http://<服务器地址>:8888/guardian/
 
 注意：Worker Cron 是唯一不依赖 MonkeyCode 运行状态的保活执行者。部署在 MonkeyCode 的 jiankong 是管理与观察面；如果该实例休眠，Worker 仍会继续执行已写入 KV 的保活计划。Cookie 被服务端吊销或到期时，页面会基于真实 Task WebSocket 的 401/403 结果标记“过期/无效”，上游 521/502/503 只显示为上游不可达，不会误报 Cookie 过期。
 
-### MonkeyCode VM 登录浏览器
+### MonkeyCode VM 登录浏览器插件
 
-在 MonkeyCode VM 安装 Chromium、Xvfb、x11vnc 与 noVNC 后，保活中心提供“打开登录浏览器”入口。PC 和手机均可打开 VM 内持久化浏览器并完成 MonkeyCode 登录；登录完成后点击“登录完成后同步”，jiankong 只在 VM 本地读取浏览器的 `monkeycode_ai_session` Cookie，将其通过 HTTPS 同步到 Worker，并立即以真实 Task WebSocket 验证。浏览器 profile 位于 `data/monkeycode-login-browser/profile/`，Cookie 不在网页、日志或 Git 中显示。noVNC 使用该实例 `control-token` 作为连接密码。
+面板的“监控插件”区域提供 `MonkeyCode 登录浏览器`。首次部署到任意 Debian/MonkeyCode VM 后，输入 jiankong 控制令牌，点击“一键安装”：插件通过该 VM 已配置的软件源安装 `Chromium`、`Noto CJK 中文字体`、`Xvfb`、`x11vnc`、`noVNC/websockify`，然后自动启动受控浏览器。安装使用系统 apt 源，不依赖 GitHub、npm 或固定镜像地址；国内或海外网络只需该 VM 自身 apt 镜像可访问。
+
+PC 和手机均可进入该插件的保活中心，点击“打开登录浏览器”完成 MonkeyCode 登录；登录完成后点击“登录完成后同步”，jiankong 只在 VM 本地读取浏览器的 `monkeycode_ai_session` Cookie，将其通过 HTTPS 同步到 Worker，并立即以真实 Task WebSocket 验证。浏览器 profile 位于 `data/monkeycode-login-browser/profile/`，Cookie 不在网页、日志或 Git 中显示。
+
+- noVNC 连接密码固定为：`1`。
+- jiankong 控制令牌仍只保护面板 API 和“打开登录浏览器”动作；它不再作为 VNC 密码。
+- VNC 仅监听 VM 回环地址；由 noVNC 的 HTTPS 预览入口访问，不直接暴露 `5900` 或 Chromium 调试端口。
+- 插件不支持网页卸载，避免清掉当前 VM 已登录的浏览器资料；它可以随 jiankong 仓库更新，并可在新 VM 上再次一键安装。
 
 端口、服务匹配、名称和可选组件配置见 `jiankong.json`。程序不会假设某个固定业务端口或固定服务器 IP。
 
