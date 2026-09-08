@@ -903,6 +903,17 @@ class Handler(BaseHTTPRequestHandler):
             guardian_event("应用配置", ok, response.get("error") or "Worker 配置已写入 KV 并立即生效")
             self.send_json(code if code < 500 else 502, {"ok": ok, "worker": response})
             return
+        if self.path == "/api/guardian/credential":
+            if not self.authorized():
+                self.send_json(401, {"error": "控制令牌无效"})
+                return
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+                code, response = guardian_request("POST", "credential", {"cookie": body.get("cookie", ""), "expiresAt": body.get("expiresAt")})
+                self.send_json(code, response)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+            return
         if self.path == "/api/guardian/keepalive":
             if not self.authorized():
                 self.send_json(401, {"error": "控制令牌无效"})
