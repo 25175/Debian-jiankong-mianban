@@ -76,7 +76,7 @@ def start() -> dict:
         pid_path("vnc").write_text(str(proc.pid))
     spawn("novnc", ["websockify", "--web", "/usr/share/novnc", str(PORT), f"localhost:{VNC}"])
     if not alive(pid_path("chromium")):
-        spawn("chromium", ["chromium", "--no-sandbox", "--disable-dev-shm-usage", "--user-data-dir=" + str(PROFILE), "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=" + str(CDP), TARGET], env)
+        spawn("chromium", ["chromium", "--no-sandbox", "--disable-dev-shm-usage", "--lang=zh-CN", "--accept-lang=zh-CN,zh", "--user-data-dir=" + str(PROFILE), "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=" + str(CDP), TARGET], env)
     time.sleep(2)
     return status()
 
@@ -105,14 +105,28 @@ def cookie() -> dict:
     return {"cookie": "monkeycode_ai_session=" + found["value"], "expiresAt": int(found.get("expires", -1) * 1000) if found.get("expires", -1) > 0 else None}
 
 
+def restart() -> dict:
+    path = pid_path("chromium")
+    if alive(path):
+        try:
+            os.kill(int(path.read_text().strip()), 15)
+        except (OSError, ValueError):
+            pass
+        time.sleep(1)
+    path.unlink(missing_ok=True)
+    return start()
+
+
 if __name__ == "__main__":
     action = sys.argv[1] if len(sys.argv) > 1 else "status"
     if action == "start":
         print(json.dumps(start(), ensure_ascii=False))
+    elif action == "restart":
+        print(json.dumps(restart(), ensure_ascii=False))
     elif action == "status":
         print(json.dumps(status(), ensure_ascii=False))
     elif action == "cookie":
         # Never print cookie outside an authenticated server-side caller.
         print(json.dumps(cookie(), ensure_ascii=False))
     else:
-        raise SystemExit("usage: monkeycode_browser.py [start|status|cookie]")
+        raise SystemExit("usage: monkeycode_browser.py [start|restart|status|cookie]")
