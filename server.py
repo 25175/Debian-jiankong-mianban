@@ -191,7 +191,7 @@ def guardian_request(method: str, endpoint: str, payload: dict | None = None) ->
 def guardian_status() -> dict:
     """Read the actual Worker state now; no cached status is substituted."""
     ready, reason = guardian_ready()
-    result = {"ready": ready, "message": reason, "history": list(GUARDIAN_HISTORY), "fresh": True, "read_at": int(time.time() * 1000)}
+    result = {"ready": ready, "message": reason, "history": list(GUARDIAN_HISTORY), "fresh": True, "read_at": int(time.time() * 1000), "credential": {"status": "unknown", "updatedAt": None, "message": "等待真实 Task WebSocket 保活结果"}}
     if not ready:
         return result
     try:
@@ -200,6 +200,16 @@ def guardian_status() -> dict:
         # status lane in a shared executor queue.
         code, body = guardian_request("GET", "status")
         result.update({"http_status": code, "worker": body, "ok": code == 200 and not body.get("error")})
+        worker = result.get("worker") if isinstance(result.get("worker"), dict) else {}
+        if not isinstance(worker, dict):
+            worker = {}
+        credential_status = str(worker.get("credentialStatus") or "unknown")
+        credential_checked_at = worker.get("credentialCheckedAt")
+        credential_expired_at = worker.get("credentialExpiredAt")
+        credential_expiry = worker.get("credentialExpiry")
+        result["credential"] = {"status": credential_status, "checkedAt": credential_checked_at, "expiredAt": credential_expired_at, "expiry": credential_expiry, "message": worker.get("credentialMessage") or "等待真实 Task WebSocket 保活结果"}
+        if credential_status == "expired_or_invalid":
+            result["message"] = "MonkeyCode 登录凭据（Cookie/CIK）已过期或无效，请重新登录后在本页面快速更新"
     except Exception as exc:
         result.update({"http_status": 502, "ok": False, "worker": {"ok": False, "error": f"实时 Worker 状态读取失败：{exc}"}})
     return result

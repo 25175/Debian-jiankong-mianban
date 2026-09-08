@@ -58,7 +58,7 @@ http://<服务器地址>:8888/guardian/
 4. 点击“保存接入信息”，再点击“写入 Worker，立即生效”；
 5. 页面自动读回 Worker / KV / 上游状态。Worker 的 Cron 保持 780–840 秒随机间隔，即 13–14 分钟。
 
-注意：Worker Cron 是唯一不依赖 MonkeyCode 运行状态的保活执行者。部署在 MonkeyCode 的 jiankong 是管理与观察面；如果该实例休眠，Worker 仍会继续执行已写入 KV 的保活计划。保持 Worker 的 `MONKEYCODE_COOKIE` Secret 有效；Cookie 被服务端吊销或到期时，页面会记录保活失败，但不能自行重新登录。
+注意：Worker Cron 是唯一不依赖 MonkeyCode 运行状态的保活执行者。部署在 MonkeyCode 的 jiankong 是管理与观察面；如果该实例休眠，Worker 仍会继续执行已写入 KV 的保活计划。保持 Worker 的 `MONKEYCODE_COOKIE` Secret 有效；Cookie 被服务端吊销或到期时，页面会基于真实 Task WebSocket 的 401/403 结果标记“过期/无效”，但不能自行重新登录。快速更新方式：在 PC 或手机网页端重新登录 MonkeyCode 并打开目标 Task 确认可用，再在 Cloudflare Worker Secret 更新完整 `MONKEYCODE_COOKIE`，保存后回到保活中心点击“立即保活一次”；上游 521/502/503 只显示为上游不可达，不会误报 CIK 过期。
 
 端口、服务匹配、名称和可选组件配置见 `jiankong.json`。程序不会假设某个固定业务端口或固定服务器 IP。
 
