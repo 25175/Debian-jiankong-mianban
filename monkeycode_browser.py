@@ -184,18 +184,29 @@ def github_login_url() -> dict:
     page = browser_page()
     script = """(() => {
       const text = e => (e.innerText || e.textContent || '').trim();
+      const controls = [...document.querySelectorAll('button,a,[role=button],div,span')];
       const clickText = needle => {
-        const el = [...document.querySelectorAll('button,a,[role=button],div,span')]
-          .find(x => text(x).includes(needle));
+        const el = controls.find(x => text(x).includes(needle));
         if (el) { el.click(); return true; }
         return false;
       };
-      clickText('百智云');
+      // Each transition is clicked at most once. Repeated OAuth clicks replace
+      // the server-side state and make the previously returned phone link fail.
+      if (!window.__jk_baizhi_clicked && clickText('百智云')) {
+        window.__jk_baizhi_clicked = true;
+        return 'clicked-baizhi';
+      }
       const checkbox = [...document.querySelectorAll('input[type=checkbox]')].find(x => !x.checked);
-      if (checkbox) checkbox.click();
-      const github = [...document.querySelectorAll('a,button,[role=button]')]
-        .find(x => /github/i.test((x.href || '') + ' ' + text(x) + ' ' + (x.getAttribute('aria-label') || '')));
-      if (github) { github.click(); return 'clicked-github'; }
+      if (checkbox && !window.__jk_terms_accepted) {
+        checkbox.click(); window.__jk_terms_accepted = true;
+        return 'accepted-terms';
+      }
+      const github = controls.find(x => /github/i.test((x.href || '') + ' ' + text(x) + ' ' + (x.getAttribute('aria-label') || '')));
+      if (github && !window.__jk_github_clicked) {
+        window.__jk_github_clicked = true;
+        github.click();
+        return 'clicked-github-once';
+      }
       return 'waiting-github';
     })()"""
     ws = websocket.create_connection(page["webSocketDebuggerUrl"], suppress_origin=True, timeout=8)
