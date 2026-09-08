@@ -142,20 +142,74 @@ def status() -> dict:
     return {"installed": not missing, "missing": missing, "running": alive(pid_path("chromium")), "vnc": alive(pid_path("vnc")), "web": alive(pid_path("novnc")), "port": PORT, "cdp": CDP, "vnc_password_hint": "1"}
 
 
-def cookie() -> dict:
-    pages = json.load(urllib.request.urlopen(f"http://127.0.0.1:{CDP}/json/list", timeout=5))
-    page = next((p for p in pages if p.get("type") == "page" and "monkeycode-ai.com" in p.get("url", "")), None)
-    if not page:
-        raise RuntimeError("登录浏览器尚未打开 MonkeyCode 页面")
+def pages() -> list[dict]:
+    return json.load(urllib.request.urlopen(f"http://127.0.0.1:{CDP}/json/list", timeout=5))
+
+
+def cdp(page: dict, method: str, params: dict | None = None) -> dict:
     ws = websocket.create_connection(page["webSocketDebuggerUrl"], suppress_origin=True, timeout=8)
     try:
-        ws.send(json.dumps({"id": 1, "method": "Network.getAllCookies"}))
+        ws.send(json.dumps({"id": 1, "method": method, "params": params or {}}))
         while True:
             result = json.loads(ws.recv())
             if result.get("id") == 1:
-                break
+                return result
     finally:
         ws.close()
+
+
+def monkeycode_page() -> dict:
+    page = next((p for p in pages() if p.get("type") == "page" and "monkeycode-ai.com" in p.get("url", "")), None)
+    if not page:
+        raise RuntimeError("登录浏览器尚未打开 MonkeyCode 页面")
+    return page
+
+
+def github_login_url() -> dict:
+    """Drive the already-isolated VM browser to MonkeyCode's GitHub OAuth URL.
+
+    The returned URL is intentionally short-lived OAuth state, not a Cookie.
+    GitHub authorization happens on the user's phone; the VM browser remains
+    the session whose Cookie is later polled and synchronized by jiankong.
+    """
+    start()
+    page = monkeycode_page()
+    cdp(page, "Page.navigate", {"url": TARGET})
+    script = """(() => {
+      const text = e => (e.innerText || e.textContent || '').trim();
+      const clickText = needle => {
+        const el = [...document.querySelectorAll('button,a,[role=button],div,span')]
+          .find(x => text(x).includes(needle));
+        if (el) { el.click(); return true; }
+        return false;
+      };
+      clickText('百智云');
+      const checkbox = [...document.querySelectorAll('input[type=checkbox]')].find(x => !x.checked);
+      if (checkbox) checkbox.click();
+      const github = [...document.querySelectorAll('a,button,[role=button]')]
+        .find(x => /github/i.test((x.href || '') + ' ' + text(x) + ' ' + (x.getAttribute('aria-label') || '')));
+      if (github) { github.click(); return 'clicked-github'; }
+      return 'waiting-github';
+    })()"""
+    deadline = time.time() + 15
+    last_url = ""
+    while time.time() < deadline:
+        try:
+            page = monkeycode_page()
+            cdp(page, "Runtime.evaluate", {"expression": script, "awaitPromise": True})
+        except RuntimeError:
+            pass
+        time.sleep(1)
+        for candidate in pages():
+            url = str(candidate.get("url") or "")
+            if "github.com/login" in url and "client_id=" in url:
+                return {"url": url, "expiresAt": int((time.time() + 300) * 1000)}
+            last_url = url or last_url
+    raise RuntimeError("未能从 MonkeyCode 登录页取得 GitHub 授权链接；请检查百智云登录页是否已加载（当前页：%s）" % (last_url[:200] or "未知"))
+
+
+def cookie() -> dict:
+    result = cdp(monkeycode_page(), "Network.getAllCookies")
     found = next((c for c in result.get("result", {}).get("cookies", []) if c.get("name") == "monkeycode_ai_session" and "monkeycode-ai.com" in c.get("domain", "") and c.get("value")), None)
     if not found:
         raise RuntimeError("尚未登录 MonkeyCode；请在登录浏览器中完成登录")
@@ -184,8 +238,10 @@ if __name__ == "__main__":
         print(json.dumps(restart(), ensure_ascii=False))
     elif action == "status":
         print(json.dumps(status(), ensure_ascii=False))
+    elif action == "github-url":
+        print(json.dumps(github_login_url(), ensure_ascii=False))
     elif action == "cookie":
         # Never print cookie outside an authenticated server-side caller.
         print(json.dumps(cookie(), ensure_ascii=False))
     else:
-        raise SystemExit("usage: monkeycode_browser.py [install|start|restart|status|cookie]")
+        raise SystemExit("usage: monkeycode_browser.py [install|start|restart|status|github-url|cookie]")
