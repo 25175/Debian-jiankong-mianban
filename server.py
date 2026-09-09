@@ -796,8 +796,17 @@ class Handler(BaseHTTPRequestHandler):
         action = str(body.get("action") or "")
         if action not in {"back", "refresh", "home", "click_text", "type", "key", "navigate", "auto_login"}:
             raise ValueError("不支持的浏览器操作")
-        value = str(body.get("value") or "")
-        return login_browser_run("action", {"action": action, "value": value})
+        # Keep the selected login mode and one-request credentials when handing
+        # off to VM Chromium. Previously only action/value were forwarded, so
+        # every selection became the default password mode.
+        payload = {"action": action, "value": str(body.get("value") or "")}
+        if action == "auto_login":
+            payload.update({
+                "mode": str(body.get("mode") or ""),
+                "account": str(body.get("account") or ""),
+                "password": str(body.get("password") or ""),
+            })
+        return login_browser_run("action", payload)
 
     def send_browser_redirect(self, location: str, cookie: str | None = None) -> None:
         self.send_response(302)
