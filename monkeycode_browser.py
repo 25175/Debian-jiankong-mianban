@@ -339,9 +339,28 @@ def browser_action(payload: dict) -> dict:
             expr = f"""(()=>{{const a={json.dumps(account,ensure_ascii=False)},p={json.dumps(password,ensure_ascii=False)}; const es=[...document.querySelectorAll('input')]; const email=es.find(e=>e.type==='email'||/email|账号|account/i.test(e.placeholder||e.name||'')); const pw=es.find(e=>e.type==='password'); if(!email||!pw) throw new Error('未找到账号密码输入框'); const set=(e,v)=>{{const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;s.call(e,v);e.dispatchEvent(new Event('input',{{bubbles:true}}));e.dispatchEvent(new Event('change',{{bubbles:true}}));}};set(email,a);set(pw,p);const b=[...document.querySelectorAll('button')].find(e=>/登录|sign in/i.test(e.innerText||''));if(!b)throw new Error('未找到登录按钮');b.click();return 'submitted';}})()"""
             result = cdp(page, "Runtime.evaluate", {"expression": expr, "returnByValue": True})
         else:
-            needle = "百智云登录" if mode == "baizhi" else "GitHub 登录"
-            expr = f"""(()=>{{const xs=[...document.querySelectorAll('button,a,[role=button]')];const x=xs.find(e=>(e.innerText||e.textContent||e.getAttribute('aria-label')||'').includes({json.dumps(needle,ensure_ascii=False)}));if(!x)throw new Error('未找到'+{json.dumps(needle,ensure_ascii=False)}+'入口');x.click();return 'clicked';}})()"""
-            result = cdp(page, "Runtime.evaluate", {"expression": expr, "returnByValue": True})
+            def evaluate(expression: str) -> dict:
+                result = cdp(page, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
+                if result.get("result", {}).get("exceptionDetails"):
+                    detail = result["result"]["exceptionDetails"].get("exception", {}).get("description") or "页面操作失败"
+                    raise RuntimeError(detail[:500])
+                return result
+
+            def accept_terms() -> None:
+                evaluate("(()=>{const x=[...document.querySelectorAll('input[type=checkbox]')].find(e=>!e.checked);if(x)x.click();return 'ok'})()")
+
+            def click_text(text: str, aria: bool = False) -> None:
+                needle = json.dumps(text, ensure_ascii=False)
+                field = "(e.getAttribute('aria-label')||'')" if aria else "(e.innerText||e.textContent||'')"
+                evaluate(f"""(()=>{{const needle={needle};const xs=[...document.querySelectorAll('button,a,[role=button]')];const x=xs.filter(e=>{field}.includes(needle)).sort((a,b)=>(a.innerText||'').length-(b.innerText||'').length)[0];if(!x)throw new Error('未找到控件：'+needle);x.click();return 'clicked';}})()""")
+
+            # CN flow: MonkeyCode -> Baizhi -> consent -> provider.
+            accept_terms()
+            click_text("百智云登录")
+            time.sleep(1.5)
+            accept_terms()
+            if mode == "github":
+                click_text("GitHub 登录", aria=True)
         time.sleep(1)
         return snapshot()
     if action == "navigate":
