@@ -1010,16 +1010,6 @@ class Handler(BaseHTTPRequestHandler):
             except RuntimeError as exc:
                 self.send_json(503, {"error": str(exc)})
             return
-        if self.path == "/api/login-browser/github-url":
-            if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
-                return
-            try:
-                login = login_browser_run("github-url")
-                self.send_json(200, {"ok": True, "url": login["url"], "expiresAt": login.get("expiresAt")})
-            except RuntimeError as exc:
-                self.send_json(503, {"error": str(exc)})
-            return
         if self.path == "/api/login-browser/sync":
             if not self.authorized():
                 self.send_json(401, {"error": "控制令牌无效"})
