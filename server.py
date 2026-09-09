@@ -327,10 +327,8 @@ def login_browser_run(action: str, payload: dict | None = None) -> dict:
         raise RuntimeError("登录浏览器组件未安装")
     # github-url performs a real VM CDP navigation and waits for the Network
     # authorize request; 15 seconds is shorter than a cold Chromium/SPA load.
-    # OAuth transitions and page screenshots can briefly stall the DevTools
-    # endpoint while Chromium replaces a renderer. Do not turn that transient
-    # delay into a false failure on the phone control page.
-    timeout = 60 if action in {"github-url", "action", "snapshot"} else 15
+    # Capturing a real GitHub OAuth navigation may need a full SPA load.
+    timeout = 60 if action == "github-url" else 15
     args = ["python3", str(LOGIN_BROWSER_SCRIPT), action]
     if payload is not None:
         args.append(json.dumps(payload, ensure_ascii=False))
@@ -781,35 +779,6 @@ class Handler(BaseHTTPRequestHandler):
     def browser_authorized(self) -> bool:
         return browser_session(self.headers.get("Cookie", ""))
 
-    def mobile_browser_authorized(self) -> bool:
-        return self.authorized() or browser_session(self.headers.get("Cookie", ""))
-
-    def mobile_browser_state(self) -> dict:
-        if not self.mobile_browser_authorized():
-            raise PermissionError("需要控制令牌或从控制台打开的浏览器会话")
-        page = login_browser_run("snapshot")
-        return page
-
-    def mobile_browser_action(self) -> dict:
-        if not self.mobile_browser_authorized():
-            raise PermissionError("需要控制令牌或从控制台打开的浏览器会话")
-        length = int(self.headers.get("Content-Length", "0"))
-        body = json.loads(self.rfile.read(length) or b"{}")
-        action = str(body.get("action") or "")
-        if action not in {"back", "refresh", "home", "click_text", "type", "key", "navigate", "auto_login"}:
-            raise ValueError("不支持的浏览器操作")
-        # Keep the selected login mode and one-request credentials when handing
-        # off to VM Chromium. Previously only action/value were forwarded, so
-        # every selection became the default password mode.
-        payload = {"action": action, "value": str(body.get("value") or "")}
-        if action == "auto_login":
-            payload.update({
-                "mode": str(body.get("mode") or ""),
-                "account": str(body.get("account") or ""),
-                "password": str(body.get("password") or ""),
-            })
-        return login_browser_run("action", payload)
-
     def send_browser_redirect(self, location: str, cookie: str | None = None) -> None:
         self.send_response(302)
         self.send_header("Location", location)
@@ -926,17 +895,6 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if asset_path in ("/mobile-browser", "/mobile-browser/"):
-            asset = BASE / "mobile-browser.html"
-            data = asset.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Set-Cookie", f"jk_vnc={new_browser_session()}; Path=/; HttpOnly; SameSite=Strict; Max-Age={BROWSER_TTL}")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-            return
         if asset_path in ("/guardian", "/guardian/"):
             asset = BASE / "guardian.html"
             if not asset.is_file():
@@ -949,14 +907,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
-            return
-        if asset_path == "/api/mobile-browser/state":
-            try:
-                self.send_json(200, self.mobile_browser_state())
-            except PermissionError as exc:
-                self.send_json(401, {"error": str(exc)})
-            except (RuntimeError, OSError) as exc:
-                self.send_json(503, {"error": str(exc)})
             return
         if asset_path == "/api/login-browser/status":
             if not self.authorized():
@@ -990,14 +940,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": "Not found"})
 
     def do_POST(self) -> None:
-        if self.path == "/api/mobile-browser/action":
-            try:
-                self.send_json(200, self.mobile_browser_action())
-            except PermissionError as exc:
-                self.send_json(401, {"error": str(exc)})
-            except (RuntimeError, OSError, ValueError, json.JSONDecodeError) as exc:
-                self.send_json(400, {"error": str(exc)})
-            return
         if self.path == "/api/guardian/setup":
             if not self.authorized():
                 self.send_json(401, {"error": "控制令牌无效"})
@@ -1019,6 +961,16 @@ class Handler(BaseHTTPRequestHandler):
             ok = code == 200 and not response.get("error")
             guardian_event("应用配置", ok, response.get("error") or "Worker 配置已写入 KV 并立即生效")
             self.send_json(code if code < 500 else 502, {"ok": ok, "worker": response})
+            return
+        if self.path == "/api/login-browser/reset":
+            if not self.authorized():
+                self.send_json(401, {"error": "控制令牌无效"})
+                return
+            try:
+                browser = login_browser_run("restart")
+                self.send_json(200, {"ok": True, "browser": browser, "url": login_browser_url(self.headers.get("Host", ""))})
+            except RuntimeError as exc:
+                self.send_json(503, {"error": str(exc)})
             return
         if self.path == "/api/login-browser/start":
             if not self.authorized():
