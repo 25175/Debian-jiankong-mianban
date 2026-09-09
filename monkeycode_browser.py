@@ -306,6 +306,46 @@ def cookie() -> dict:
     return {"cookie": "monkeycode_ai_session=" + found["value"], "expiresAt": int(found.get("expires", -1) * 1000) if found.get("expires", -1) > 0 else None}
 
 
+def snapshot() -> dict:
+    page = monkeycode_page()
+    shot = cdp(page, "Page.captureScreenshot", {"format": "jpeg", "quality": 62})
+    text = cdp(page, "Runtime.evaluate", {"expression": "document.body ? document.body.innerText.slice(0, 12000) : ''", "returnByValue": True})
+    value = text.get("result", {}).get("result", {}).get("value", "")
+    return {"url": page.get("url", ""), "title": page.get("title", ""), "image": shot.get("result", {}).get("data", ""), "text": value}
+
+
+def browser_action(payload: dict) -> dict:
+    page = monkeycode_page()
+    action, value = str(payload.get("action") or ""), str(payload.get("value") or "")
+    if action == "navigate":
+        if not value.startswith("https://"):
+            raise RuntimeError("只允许导航到 HTTPS 地址")
+        result = cdp(page, "Page.navigate", {"url": value})
+    elif action == "back":
+        result = cdp(page, "Runtime.evaluate", {"expression": "history.back(); 'ok'", "returnByValue": True})
+    elif action == "refresh":
+        result = cdp(page, "Page.reload", {"ignoreCache": True})
+    elif action == "home":
+        result = cdp(page, "Page.navigate", {"url": TARGET})
+    elif action == "click_text":
+        needle = json.dumps(value, ensure_ascii=False)
+        expr = f"""(()=>{{const needle={needle}; const xs=[...document.querySelectorAll('button,a,[role=button],input[type=submit]')]; const x=xs.filter(e=>(e.innerText||e.textContent||e.value||e.getAttribute('aria-label')||'').trim().includes(needle)).sort((a,b)=>(a.innerText||a.value||'').length-(b.innerText||b.value||'').length)[0]; if(!x) throw new Error('未找到控件：'+needle); x.click(); return x.innerText||x.value||x.getAttribute('aria-label')||'ok';}})()"""
+        result = cdp(page, "Runtime.evaluate", {"expression": expr, "returnByValue": True})
+        if result.get("result", {}).get("exceptionDetails"):
+            raise RuntimeError("未找到可点击控件：" + value)
+    elif action == "type":
+        result = cdp(page, "Input.insertText", {"text": value})
+    elif action == "key":
+        if value not in {"Enter", "Tab", "Escape", "ArrowLeft", "ArrowRight", "Backspace"}:
+            raise RuntimeError("不支持的按键")
+        result = cdp(page, "Input.dispatchKeyEvent", {"type": "keyDown", "key": value, "code": value})
+        cdp(page, "Input.dispatchKeyEvent", {"type": "keyUp", "key": value, "code": value})
+    else:
+        raise RuntimeError("不支持的浏览器操作")
+    time.sleep(0.4)
+    return snapshot()
+
+
 def restart() -> dict:
     path = pid_path("chromium")
     if alive(path):
@@ -333,5 +373,10 @@ if __name__ == "__main__":
     elif action == "cookie":
         # Never print cookie outside an authenticated server-side caller.
         print(json.dumps(cookie(), ensure_ascii=False))
+    elif action == "snapshot":
+        print(json.dumps(snapshot(), ensure_ascii=False))
+    elif action == "action":
+        payload = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
+        print(json.dumps(browser_action(payload), ensure_ascii=False))
     else:
-        raise SystemExit("usage: monkeycode_browser.py [install|start|restart|status|github-url|cookie]")
+        raise SystemExit("usage: monkeycode_browser.py [install|start|restart|status|github-url|cookie|snapshot|action JSON]")

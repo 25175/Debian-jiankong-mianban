@@ -6,6 +6,7 @@ import collections
 import glob
 from concurrent.futures import ThreadPoolExecutor
 import html
+import base64
 import http.client
 import json
 import os
@@ -321,14 +322,17 @@ def set_plugin(key: str, installed: bool) -> dict:
     return {"key": key, "installed": state[key]}
 
 
-def login_browser_run(action: str) -> dict:
+def login_browser_run(action: str, payload: dict | None = None) -> dict:
     if not LOGIN_BROWSER_SCRIPT.exists():
         raise RuntimeError("登录浏览器组件未安装")
     # github-url performs a real VM CDP navigation and waits for the Network
     # authorize request; 15 seconds is shorter than a cold Chromium/SPA load.
     # Keep the shorter timeout for local status/cookie operations.
     timeout = 60 if action == "github-url" else 15
-    code, output = command("python3", str(LOGIN_BROWSER_SCRIPT), action, timeout=timeout)
+    args = ["python3", str(LOGIN_BROWSER_SCRIPT), action]
+    if payload is not None:
+        args.append(json.dumps(payload, ensure_ascii=False))
+    code, output = command(*args, timeout=timeout)
     if code != 0:
         raise RuntimeError(output or "登录浏览器启动失败")
     try:
@@ -775,6 +779,26 @@ class Handler(BaseHTTPRequestHandler):
     def browser_authorized(self) -> bool:
         return browser_session(self.headers.get("Cookie", ""))
 
+    def mobile_browser_authorized(self) -> bool:
+        return self.authorized() or browser_session(self.headers.get("Cookie", ""))
+
+    def mobile_browser_state(self) -> dict:
+        if not self.mobile_browser_authorized():
+            raise PermissionError("需要控制令牌或从控制台打开的浏览器会话")
+        page = login_browser_run("snapshot")
+        return page
+
+    def mobile_browser_action(self) -> dict:
+        if not self.mobile_browser_authorized():
+            raise PermissionError("需要控制令牌或从控制台打开的浏览器会话")
+        length = int(self.headers.get("Content-Length", "0"))
+        body = json.loads(self.rfile.read(length) or b"{}")
+        action = str(body.get("action") or "")
+        if action not in {"back", "refresh", "home", "click_text", "type", "key", "navigate"}:
+            raise ValueError("不支持的浏览器操作")
+        value = str(body.get("value") or "")
+        return login_browser_run("action", {"action": action, "value": value})
+
     def send_browser_redirect(self, location: str, cookie: str | None = None) -> None:
         self.send_response(302)
         self.send_header("Location", location)
@@ -936,6 +960,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": "Not found"})
 
     def do_POST(self) -> None:
+        if self.path == "/api/mobile-browser/action":
+            try:
+                self.send_json(200, self.mobile_browser_action())
+            except PermissionError as exc:
+                self.send_json(401, {"error": str(exc)})
+            except (RuntimeError, OSError, ValueError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+            return
         if self.path == "/api/guardian/setup":
             if not self.authorized():
                 self.send_json(401, {"error": "控制令牌无效"})
@@ -1030,6 +1062,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, {"ok": True, "plugin": set_plugin(str(body.get("key", "")), bool(body.get("installed")))})
             except (ValueError, OSError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"error": str(exc)})
+            return
+        if self.path == "/api/mobile-browser/state":
+            try:
+                self.send_json(200, self.mobile_browser_state())
+            except PermissionError as exc:
+                self.send_json(401, {"error": str(exc)})
+            except (RuntimeError, OSError) as exc:
+                self.send_json(503, {"error": str(exc)})
             return
         if self.path == "/api/browser-session":
             if not self.authorized():
