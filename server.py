@@ -327,8 +327,10 @@ def login_browser_run(action: str, payload: dict | None = None) -> dict:
         raise RuntimeError("登录浏览器组件未安装")
     # github-url performs a real VM CDP navigation and waits for the Network
     # authorize request; 15 seconds is shorter than a cold Chromium/SPA load.
-    # Automatic login includes several SPA/provider transitions.
-    timeout = 60 if action == "github-url" else (45 if action == "action" else 15)
+    # OAuth transitions and page screenshots can briefly stall the DevTools
+    # endpoint while Chromium replaces a renderer. Do not turn that transient
+    # delay into a false failure on the phone control page.
+    timeout = 60 if action in {"github-url", "action", "snapshot"} else 15
     args = ["python3", str(LOGIN_BROWSER_SCRIPT), action]
     if payload is not None:
         args.append(json.dumps(payload, ensure_ascii=False))
