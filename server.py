@@ -794,7 +794,7 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length) or b"{}")
         action = str(body.get("action") or "")
-        if action not in {"back", "refresh", "home", "click_text", "type", "key", "navigate"}:
+        if action not in {"back", "refresh", "home", "click_text", "type", "key", "navigate", "auto_login"}:
             raise ValueError("不支持的浏览器操作")
         value = str(body.get("value") or "")
         return login_browser_run("action", {"action": action, "value": value})
