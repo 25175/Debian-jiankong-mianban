@@ -188,15 +188,20 @@ def monkeycode_page() -> dict:
 
 
 def browser_page() -> dict:
-    """Return a VM Chromium page even when it is still on about:blank."""
-    candidates = [p for p in pages() if p.get("type") == "page" and p.get("webSocketDebuggerUrl")]
-    # Prefer the actual MonkeyCode document; Chromium also exposes internal
-    # omnibox pages which are not controllable login targets.
-    page = next((p for p in candidates if "monkeycode-ai.com" in p.get("url", "")), None)
-    page = page or next((p for p in candidates if p.get("url", "").startswith(("http://", "https://"))), None)
-    if not page:
-        raise RuntimeError("登录浏览器未创建可用页面；请稍后重试")
-    return page
+    """Return a real web page, waiting through Chromium target replacement."""
+    deadline = time.time() + 15
+    last = None
+    while time.time() < deadline:
+        try:
+            candidates = [p for p in pages() if p.get("type") == "page" and p.get("webSocketDebuggerUrl")]
+            page = next((p for p in candidates if p.get("url", "").startswith(("http://", "https://"))), None)
+            if page:
+                return page
+            last = "没有可用的 page target"
+        except RuntimeError as exc:
+            last = str(exc)
+        time.sleep(.4)
+    raise RuntimeError(f"登录浏览器未创建可用页面：{last or '未知错误'}")
 
 
 def github_login_url() -> dict:
