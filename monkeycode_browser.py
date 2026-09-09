@@ -354,10 +354,12 @@ def browser_action(payload: dict) -> dict:
                 field = "(e.getAttribute('aria-label')||'')" if aria else "(e.innerText||e.textContent||'')"
                 evaluate(f"""(()=>{{const needle={needle};const xs=[...document.querySelectorAll('button,a,[role=button]')];const x=xs.filter(e=>{field}.includes(needle)).sort((a,b)=>(a.innerText||'').length-(b.innerText||'').length)[0];if(!x)throw new Error('未找到控件：'+needle);x.click();return 'clicked';}})()""")
 
-            # CN flow: MonkeyCode -> Baizhi -> consent -> provider.
+            # CN flow: MonkeyCode -> Baizhi -> consent -> provider. The VM
+            # may already be on the Baizhi page after a previous attempt.
             accept_terms()
-            click_text("百智云登录")
-            time.sleep(1.5)
+            if "baizhi.cloud" not in str(page.get("url") or ""):
+                click_text("百智云登录")
+                time.sleep(1.5)
             accept_terms()
             if mode == "github":
                 click_text("GitHub 登录", aria=True)
