@@ -915,6 +915,16 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if asset_path in ("/mobile-browser", "/mobile-browser/"):
+            asset = BASE / "mobile-browser.html"
+            data = asset.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if asset_path in ("/guardian", "/guardian/"):
             asset = BASE / "guardian.html"
             if not asset.is_file():
