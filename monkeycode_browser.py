@@ -323,6 +323,27 @@ def snapshot() -> dict:
 def browser_action(payload: dict) -> dict:
     page = monkeycode_page()
     action, value = str(payload.get("action") or ""), str(payload.get("value") or "")
+    if action == "auto_login":
+        mode = str(payload.get("mode") or "password")
+        account = str(payload.get("account") or "")
+        password = str(payload.get("password") or "")
+        if mode not in {"password", "baizhi", "github"}:
+            raise RuntimeError("不支持的登录方式")
+        if mode == "password" and (not account or not password):
+            raise RuntimeError("账号密码登录需要账号和密码")
+        # Navigate to the real MonkeyCode login page, select the requested
+        # provider, then fill only visible form fields. No credential is saved.
+        cdp(page, "Page.navigate", {"url": "https://monkeycode-ai.com/login"})
+        time.sleep(1.2)
+        if mode == "password":
+            expr = f"""(()=>{{const a={json.dumps(account,ensure_ascii=False)},p={json.dumps(password,ensure_ascii=False)}; const es=[...document.querySelectorAll('input')]; const email=es.find(e=>e.type==='email'||/email|账号|account/i.test(e.placeholder||e.name||'')); const pw=es.find(e=>e.type==='password'); if(!email||!pw) throw new Error('未找到账号密码输入框'); const set=(e,v)=>{{const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;s.call(e,v);e.dispatchEvent(new Event('input',{{bubbles:true}}));e.dispatchEvent(new Event('change',{{bubbles:true}}));}};set(email,a);set(pw,p);const b=[...document.querySelectorAll('button')].find(e=>/登录|sign in/i.test(e.innerText||''));if(!b)throw new Error('未找到登录按钮');b.click();return 'submitted';}})()"""
+            result = cdp(page, "Runtime.evaluate", {"expression": expr, "returnByValue": True})
+        else:
+            needle = "百智云登录" if mode == "baizhi" else "GitHub 登录"
+            expr = f"""(()=>{{const xs=[...document.querySelectorAll('button,a,[role=button]')];const x=xs.find(e=>(e.innerText||e.textContent||e.getAttribute('aria-label')||'').includes({json.dumps(needle,ensure_ascii=False)}));if(!x)throw new Error('未找到'+{json.dumps(needle,ensure_ascii=False)}+'入口');x.click();return 'clicked';}})()"""
+            result = cdp(page, "Runtime.evaluate", {"expression": expr, "returnByValue": True})
+        time.sleep(1)
+        return snapshot()
     if action == "navigate":
         if not value.startswith("https://"):
             raise RuntimeError("只允许导航到 HTTPS 地址")
