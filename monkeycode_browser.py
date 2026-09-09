@@ -227,6 +227,8 @@ def github_login_url() -> dict:
         return 'accepted-terms';
       }
       const github = controls.find(x => /github/i.test((x.href || '') + ' ' + text(x) + ' ' + (x.getAttribute('aria-label') || '')));
+      // Baizhi.Cloud exposes the provider via an aria-label, with no visible
+      // text. Match both forms so the phone-login flow reaches GitHub.
       if (github && !window.__jk_github_clicked) {
         window.__jk_github_clicked = true;
         github.click();
