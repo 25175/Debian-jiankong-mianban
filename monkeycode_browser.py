@@ -313,7 +313,12 @@ def cookie() -> dict:
 
 
 def snapshot() -> dict:
-    page = monkeycode_page()
+    # During OAuth the active VM page is GitHub/Baizhi rather than MonkeyCode.
+    # Snapshot the current web page so the phone UI never appears frozen.
+    try:
+        page = monkeycode_page()
+    except RuntimeError:
+        page = browser_page()
     shot = cdp(page, "Page.captureScreenshot", {"format": "jpeg", "quality": 62})
     text = cdp(page, "Runtime.evaluate", {"expression": "document.body ? document.body.innerText.slice(0, 12000) : ''", "returnByValue": True})
     value = text.get("result", {}).get("result", {}).get("value", "")
@@ -370,7 +375,22 @@ def browser_action(payload: dict) -> dict:
             accept_terms()
             if mode == "github":
                 click_text("GitHub 登录", aria=True)
-                time.sleep(2)
+                # The real OAuth navigation opens GitHub in the same VM page.
+                # Fill and submit GitHub credentials there; the callback then
+                # returns to Baizhi/MonkeyCode in this same browser profile.
+                deadline = time.time() + 20
+                while time.time() < deadline:
+                    target = browser_page()
+                    if "github.com" in str(target.get("url") or ""):
+                        def fill(selector: str, value: str) -> None:
+                            expr = f"""(()=>{{const e=document.querySelector({json.dumps(selector)});if(!e)throw new Error('未找到 GitHub 输入框');const s=Object.getOwnPropertyDescriptor(e.constructor.prototype,'value')?.set||Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;s.call(e,{json.dumps(value,ensure_ascii=False)});e.dispatchEvent(new Event('input',{{bubbles:true}}));e.dispatchEvent(new Event('change',{{bubbles:true}}));return true}})()"""
+                            evaluate(expr, target)
+                        fill('input[name="login"]', account)
+                        fill('input[name="password"]', password)
+                        evaluate("(()=>{const e=document.querySelector('input[type=submit],button[type=submit]');if(!e)throw new Error('未找到 GitHub 登录提交按钮');e.click();return true})()", target)
+                        time.sleep(5)
+                        break
+                    time.sleep(.5)
         time.sleep(1)
         return snapshot()
     if action == "navigate":
