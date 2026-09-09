@@ -324,7 +324,11 @@ def set_plugin(key: str, installed: bool) -> dict:
 def login_browser_run(action: str) -> dict:
     if not LOGIN_BROWSER_SCRIPT.exists():
         raise RuntimeError("登录浏览器组件未安装")
-    code, output = command("python3", str(LOGIN_BROWSER_SCRIPT), action, timeout=15)
+    # github-url performs a real VM CDP navigation and waits for the Network
+    # authorize request; 15 seconds is shorter than a cold Chromium/SPA load.
+    # Keep the shorter timeout for local status/cookie operations.
+    timeout = 60 if action == "github-url" else 15
+    code, output = command("python3", str(LOGIN_BROWSER_SCRIPT), action, timeout=timeout)
     if code != 0:
         raise RuntimeError(output or "登录浏览器启动失败")
     try:
