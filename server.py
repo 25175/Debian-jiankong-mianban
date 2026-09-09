@@ -921,6 +921,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Set-Cookie", f"jk_vnc={new_browser_session()}; Path=/; HttpOnly; SameSite=Strict; Max-Age={BROWSER_TTL}")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -937,6 +938,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+            return
+        if asset_path == "/api/mobile-browser/state":
+            try:
+                self.send_json(200, self.mobile_browser_state())
+            except PermissionError as exc:
+                self.send_json(401, {"error": str(exc)})
+            except (RuntimeError, OSError) as exc:
+                self.send_json(503, {"error": str(exc)})
             return
         if asset_path == "/api/login-browser/status":
             if not self.authorized():
@@ -1011,8 +1020,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(503, {"error": str(exc)})
             return
         if self.path == "/api/login-browser/sync":
-            if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
+            if not (self.authorized() or self.browser_authorized()):
+                self.send_json(401, {"error": "需要控制令牌或手机控制页会话"})
                 return
             try:
                 browser_cookie = login_browser_run("cookie")
@@ -1062,14 +1071,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, {"ok": True, "plugin": set_plugin(str(body.get("key", "")), bool(body.get("installed")))})
             except (ValueError, OSError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"error": str(exc)})
-            return
-        if self.path == "/api/mobile-browser/state":
-            try:
-                self.send_json(200, self.mobile_browser_state())
-            except PermissionError as exc:
-                self.send_json(401, {"error": str(exc)})
-            except (RuntimeError, OSError) as exc:
-                self.send_json(503, {"error": str(exc)})
             return
         if self.path == "/api/browser-session":
             if not self.authorized():
