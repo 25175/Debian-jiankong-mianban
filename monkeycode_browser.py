@@ -143,7 +143,23 @@ def status() -> dict:
 
 
 def pages() -> list[dict]:
-    return json.load(urllib.request.urlopen(f"http://127.0.0.1:{CDP}/json/list", timeout=5))
+    """Read the VM Chromium target list without letting a stalled renderer abort login.
+
+    Chromium's DevTools HTTP endpoint can briefly stop answering while a page is
+    navigating or opening a new target. Retry a few times and let callers decide
+    whether an empty snapshot is recoverable.
+    """
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{CDP}/json/list", timeout=2) as response:
+                value = json.load(response)
+            return value if isinstance(value, list) else []
+        except (OSError, TimeoutError, ValueError) as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(0.15 * (attempt + 1))
+    raise RuntimeError(f"VM Chromium DevTools {CDP} 暂时无响应：{last_error}")
 
 
 def cdp(page: dict, method: str, params: dict | None = None) -> dict:
@@ -244,9 +260,15 @@ def github_login_url() -> dict:
                     return {"url": url, "expiresAt": int((time.time() + 300) * 1000), "source": "vm-cdp-network"}
             if event.get("method") == "Page.frameNavigated":
                 last_url = str(event.get("params", {}).get("frame", {}).get("url") or last_url)
-            # GitHub may be opened in a new tab; keep the page-list fallback
-            # only as a readback of Chromium's actual navigation, never a URL guess.
-            for candidate in pages():
+            # GitHub may be opened in a new tab. The target-list fallback is
+            # best-effort: a temporarily stalled /json/list must not discard a
+            # valid Network event or turn a transient navigation delay into a
+            # traceback shown to the phone user.
+            try:
+                candidates = pages()
+            except RuntimeError:
+                candidates = []
+            for candidate in candidates:
                 url = str(candidate.get("url") or "")
                 if "github.com/login" in url and "client_id=" in url:
                     return {"url": url, "expiresAt": int((time.time() + 300) * 1000), "source": "vm-cdp-page"}
