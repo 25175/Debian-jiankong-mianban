@@ -183,7 +183,11 @@ def monkeycode_page() -> dict:
 
 def browser_page() -> dict:
     """Return a VM Chromium page even when it is still on about:blank."""
-    page = next((p for p in pages() if p.get("type") == "page" and p.get("webSocketDebuggerUrl")), None)
+    candidates = [p for p in pages() if p.get("type") == "page" and p.get("webSocketDebuggerUrl")]
+    # Prefer the actual MonkeyCode document; Chromium also exposes internal
+    # omnibox pages which are not controllable login targets.
+    page = next((p for p in candidates if "monkeycode-ai.com" in p.get("url", "")), None)
+    page = page or next((p for p in candidates if p.get("url", "").startswith(("http://", "https://"))), None)
     if not page:
         raise RuntimeError("登录浏览器未创建可用页面；请稍后重试")
     return page
@@ -200,9 +204,14 @@ def github_login_url() -> dict:
     page = browser_page()
     script = """(() => {
       const text = e => (e.innerText || e.textContent || '').trim();
-      const controls = [...document.querySelectorAll('button,a,[role=button],div,span')];
+      // Click only real interactive controls. Clicking a wrapping div can
+      // invoke a parent handler twice or do nothing, which is dangerous for
+      // OAuth because each provider click replaces the server-side state.
+      const controls = [...document.querySelectorAll('button,a,[role="button"]')];
       const clickText = needle => {
-        const el = controls.find(x => text(x).includes(needle));
+        const el = controls
+          .filter(x => text(x).includes(needle))
+          .sort((a, b) => text(a).length - text(b).length)[0];
         if (el) { el.click(); return true; }
         return false;
       };
@@ -242,6 +251,9 @@ def github_login_url() -> dict:
 
         send("Network.enable")
         send("Page.enable")
+        # Reuse the selected MonkeyCode target and reset it to the login page.
+        # This avoids attaching to Chromium's internal omnibox target and then
+        # reporting a misleading OAuth timeout.
         send("Page.navigate", {"url": TARGET})
         deadline = time.time() + 20
         next_click = time.time() + 1
