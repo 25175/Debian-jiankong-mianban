@@ -339,8 +339,9 @@ def browser_action(payload: dict) -> dict:
             expr = f"""(()=>{{const a={json.dumps(account,ensure_ascii=False)},p={json.dumps(password,ensure_ascii=False)}; const es=[...document.querySelectorAll('input')]; const email=es.find(e=>e.type==='email'||/email|账号|account/i.test(e.placeholder||e.name||'')); const pw=es.find(e=>e.type==='password'); if(!email||!pw) throw new Error('未找到账号密码输入框'); const set=(e,v)=>{{const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;s.call(e,v);e.dispatchEvent(new Event('input',{{bubbles:true}}));e.dispatchEvent(new Event('change',{{bubbles:true}}));}};set(email,a);set(pw,p);const b=[...document.querySelectorAll('button')].find(e=>/登录|sign in/i.test(e.innerText||''));if(!b)throw new Error('未找到登录按钮');b.click();return 'submitted';}})()"""
             result = cdp(page, "Runtime.evaluate", {"expression": expr, "returnByValue": True})
         else:
-            def evaluate(expression: str) -> dict:
-                result = cdp(page, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
+            def evaluate(expression: str, target: dict | None = None) -> dict:
+                target = target or browser_page()
+                result = cdp(target, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
                 if result.get("result", {}).get("exceptionDetails"):
                     detail = result["result"]["exceptionDetails"].get("exception", {}).get("description") or "页面操作失败"
                     raise RuntimeError(detail[:500])
@@ -352,17 +353,24 @@ def browser_action(payload: dict) -> dict:
             def click_text(text: str, aria: bool = False) -> None:
                 needle = json.dumps(text, ensure_ascii=False)
                 field = "(e.getAttribute('aria-label')||'')" if aria else "(e.innerText||e.textContent||'')"
-                evaluate(f"""(()=>{{const needle={needle};const xs=[...document.querySelectorAll('button,a,[role=button]')];const x=xs.filter(e=>{field}.includes(needle)).sort((a,b)=>(a.innerText||'').length-(b.innerText||'').length)[0];if(!x)throw new Error('未找到控件：'+needle);x.click();return 'clicked';}})()""")
+                deadline = time.time() + 15
+                while time.time() < deadline:
+                    expr = f"""(()=>{{const needle={needle};const xs=[...document.querySelectorAll('button,a,[role=button]')];const x=xs.filter(e=>{field}.includes(needle)).sort((a,b)=>(a.innerText||'').length-(b.innerText||'').length)[0];if(!x)return false;x.click();return true}})()"""
+                    if evaluate(expr).get("result", {}).get("result", {}).get("value"):
+                        return
+                    time.sleep(.5)
+                raise RuntimeError("未找到控件：" + text)
 
-            # CN flow: MonkeyCode -> Baizhi -> consent -> provider. The VM
-            # may already be on the Baizhi page after a previous attempt.
+            # CN flow: MonkeyCode -> Baizhi -> consent -> provider.
             accept_terms()
-            if "baizhi.cloud" not in str(page.get("url") or ""):
+            current_url = str(browser_page().get("url") or "")
+            if "baizhi.cloud" not in current_url:
                 click_text("百智云登录")
-                time.sleep(1.5)
+                time.sleep(2)
             accept_terms()
             if mode == "github":
                 click_text("GitHub 登录", aria=True)
+                time.sleep(2)
         time.sleep(1)
         return snapshot()
     if action == "navigate":
