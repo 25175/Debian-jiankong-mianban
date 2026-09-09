@@ -257,11 +257,14 @@ def github_login_url() -> dict:
         # This avoids attaching to Chromium's internal omnibox target and then
         # reporting a misleading OAuth timeout.
         send("Page.navigate", {"url": TARGET})
-        deadline = time.time() + 20
-        next_click = time.time() + 1
-        last_url = ""
+        deadline = time.time() + 25
+        # Give the login SPA time to mount before inspecting controls. On a
+        # repeat, the previous OAuth page may still be transitioning.
+        next_click = time.time() + 2
+        ready_at = time.time() + 1.5
+        last_url = TARGET
         while time.time() < deadline:
-            if time.time() >= next_click:
+            if time.time() >= next_click and time.time() >= ready_at:
                 send("Runtime.evaluate", {"expression": script, "awaitPromise": True})
                 next_click = time.time() + 1
             try:
@@ -286,7 +289,10 @@ def github_login_url() -> dict:
                 url = str(candidate.get("url") or "")
                 if "github.com/login" in url and "client_id=" in url:
                     return {"url": url, "expiresAt": int((time.time() + 300) * 1000), "source": "vm-cdp-page"}
-                last_url = url or last_url
+                # Ignore Chromium internal targets (for example omnibox
+                # pages); they are not useful diagnostics for this flow.
+                if url.startswith(("http://", "https://")):
+                    last_url = url or last_url
     finally:
         ws.close()
     raise RuntimeError("未从 VM Chromium 的真实 Network 导航中捕获 GitHub OAuth 链接（当前页：%s）" % (last_url[:200] or "未知"))
