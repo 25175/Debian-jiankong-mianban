@@ -177,7 +177,13 @@ def cdp(page: dict, method: str, params: dict | None = None) -> dict:
 def monkeycode_page() -> dict:
     page = next((p for p in pages() if p.get("type") == "page" and "monkeycode-ai.com" in p.get("url", "")), None)
     if not page:
-        raise RuntimeError("登录浏览器尚未打开 MonkeyCode 页面")
+        # A fresh login browser can still be on about:blank. Navigate the
+        # existing VM target rather than forcing the mobile controller to use
+        # VNC just to open the first page.
+        page = browser_page()
+        cdp(page, "Page.navigate", {"url": TARGET})
+        time.sleep(1)
+        page = next((p for p in pages() if p.get("type") == "page" and "monkeycode-ai.com" in p.get("url", "")), page)
     return page
 
 
