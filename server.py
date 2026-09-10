@@ -424,14 +424,22 @@ def _net_bytes(iface: str) -> tuple[int, int]:
 
 def _refresh_public_network() -> None:
     try:
-        request = Request("https://ipwho.is/", headers={"Accept": "application/json", "User-Agent": "jiankong/1.0"})
-        with build_opener(ProxyHandler({})).open(request, timeout=7) as response:
+        opener = build_opener(ProxyHandler({}))
+        headers = {"Accept": "application/json", "User-Agent": "jiankong/1.0"}
+        # Resolve the address separately, then use ip-api's HTTP endpoint for
+        # location. It is deliberately a fallback for VM environments where
+        # third-party TLS interception closes the geolocation connection.
+        with opener.open(Request("https://api.ipify.org?format=json", headers=headers), timeout=7) as response:
+            ip = str(json.loads(response.read().decode("utf-8", "replace")).get("ip") or "")
+        if not ip:
+            raise ValueError("公网 IP 服务未返回地址")
+        with opener.open(Request("http://ip-api.com/json/" + ip, headers=headers), timeout=7) as response:
             data = json.loads(response.read().decode("utf-8", "replace"))
-        if not data.get("success", True) or not data.get("ip"):
-            raise ValueError(str(data.get("message") or "IP 定位服务未返回地址"))
-        location = " · ".join(part for part in (data.get("country"), data.get("region"), data.get("city")) if part)
+        if data.get("status") != "success":
+            raise ValueError(str(data.get("message") or "IP 定位服务未返回位置"))
+        location = " · ".join(part for part in (data.get("country"), data.get("regionName"), data.get("city")) if part)
         with PUBLIC_NETWORK_LOCK:
-            PUBLIC_NETWORK.update({"at": time.time(), "refreshing": False, "ip": str(data["ip"]), "location": location or "位置未知", "isp": str(data.get("connection", {}).get("isp") or ""), "error": ""})
+            PUBLIC_NETWORK.update({"at": time.time(), "refreshing": False, "ip": ip, "location": location or "位置未知", "isp": str(data.get("isp") or ""), "error": ""})
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         with PUBLIC_NETWORK_LOCK:
             PUBLIC_NETWORK.update({"at": time.time(), "refreshing": False, "error": str(exc)[:160]})
