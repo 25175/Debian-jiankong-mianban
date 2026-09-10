@@ -150,7 +150,7 @@ RESOURCE_HISTORY = collections.deque(maxlen=1200)
 RESOURCE_LOCK = threading.Lock()
 RESOURCE_LAST: dict = {"at": 0.0, "cpu": None, "net": None}
 PUBLIC_NETWORK_LOCK = threading.Lock()
-PUBLIC_NETWORK: dict = {"at": 0.0, "refreshing": False, "ip": "", "location": "定位中", "isp": "", "error": ""}
+PUBLIC_NETWORK: dict = {"at": 0.0, "refreshing": False, "domestic": {}, "international": {}, "error": ""}
 BROWSER_TICKETS: dict[str, float] = {}
 BROWSER_SESSIONS: dict[str, float] = {}
 BROWSER_LOCK = threading.Lock()
@@ -422,24 +422,35 @@ def _net_bytes(iface: str) -> tuple[int, int]:
     return (int(values[0]), int(values[8])) if len(values) > 8 else (0, 0)
 
 
+def _read_json(opener, url: str, headers: dict) -> dict:
+    with opener.open(Request(url, headers=headers), timeout=8) as response:
+        value = json.loads(response.read().decode("utf-8", "replace"))
+    if not isinstance(value, dict):
+        raise ValueError("IP 服务返回格式无效")
+    return value
+
+
 def _refresh_public_network() -> None:
     try:
         opener = build_opener(ProxyHandler({}))
-        headers = {"Accept": "application/json", "User-Agent": "jiankong/1.0"}
-        # Resolve the address separately, then use ip-api's HTTP endpoint for
-        # location. It is deliberately a fallback for VM environments where
-        # third-party TLS interception closes the geolocation connection.
-        with opener.open(Request("https://api.ipify.org?format=json", headers=headers), timeout=7) as response:
-            ip = str(json.loads(response.read().decode("utf-8", "replace")).get("ip") or "")
-        if not ip:
-            raise ValueError("公网 IP 服务未返回地址")
-        with opener.open(Request("http://ip-api.com/json/" + ip, headers=headers), timeout=7) as response:
-            data = json.loads(response.read().decode("utf-8", "replace"))
-        if data.get("status") != "success":
-            raise ValueError(str(data.get("message") or "IP 定位服务未返回位置"))
-        location = " · ".join(part for part in (data.get("country"), data.get("regionName"), data.get("city")) if part)
+        headers = {"Accept": "application/json,text/plain,*/*", "User-Agent": "jiankong/1.0"}
+        # Probe two independent egress paths. The international probe uses a
+        # global IP service; the domestic probe uses an in-China IP service.
+        # They can legitimately return different addresses on multi-route VMs.
+        overseas_ip = str(_read_json(opener, "https://api.ipify.org?format=json", headers).get("ip") or "")
+        if not overseas_ip:
+            raise ValueError("海外出口 IP 服务未返回地址")
+        geo = _read_json(opener, "http://ip-api.com/json/" + overseas_ip, headers)
+        if geo.get("status") != "success":
+            raise ValueError(str(geo.get("message") or "海外出口位置查询失败"))
+        domestic_raw = ""
+        with opener.open(Request("https://myip.ipip.net", headers=headers), timeout=8) as response:
+            domestic_raw = response.read().decode("utf-8", "replace").strip()
+        matched = re.search(r"当前\s*IP[：:]\s*([0-9a-fA-F:.]+)\s+来自于[：:]\s*(.+)", domestic_raw)
+        domestic = {"ip": matched.group(1), "location": matched.group(2).strip(), "isp": ""} if matched else {"ip": "", "location": domestic_raw[:180] or "查询失败", "isp": ""}
+        international = {"ip": overseas_ip, "location": " · ".join(part for part in (geo.get("country"), geo.get("regionName"), geo.get("city")) if part) or "位置未知", "isp": str(geo.get("isp") or "")}
         with PUBLIC_NETWORK_LOCK:
-            PUBLIC_NETWORK.update({"at": time.time(), "refreshing": False, "ip": ip, "location": location or "位置未知", "isp": str(data.get("isp") or ""), "error": ""})
+            PUBLIC_NETWORK.update({"at": time.time(), "refreshing": False, "domestic": domestic, "international": international, "error": ""})
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         with PUBLIC_NETWORK_LOCK:
             PUBLIC_NETWORK.update({"at": time.time(), "refreshing": False, "error": str(exc)[:160]})
@@ -453,7 +464,7 @@ def public_network() -> dict:
             PUBLIC_NETWORK["refreshing"] = True
             threading.Thread(target=_refresh_public_network, name="public-network", daemon=True).start()
             snapshot["refreshing"] = True
-    return {key: snapshot.get(key) for key in ("ip", "location", "isp", "error", "refreshing")}
+    return {key: snapshot.get(key) for key in ("domestic", "international", "error", "refreshing")}
 
 
 def resources() -> dict:
