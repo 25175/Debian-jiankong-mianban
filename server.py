@@ -149,6 +149,8 @@ TASK_LOCK = threading.Lock()
 RESOURCE_HISTORY = collections.deque(maxlen=1200)
 RESOURCE_LOCK = threading.Lock()
 RESOURCE_LAST: dict = {"at": 0.0, "cpu": None, "net": None}
+PUBLIC_NETWORK_LOCK = threading.Lock()
+PUBLIC_NETWORK: dict = {"at": 0.0, "refreshing": False, "ip": "", "location": "定位中", "isp": "", "error": ""}
 BROWSER_TICKETS: dict[str, float] = {}
 BROWSER_SESSIONS: dict[str, float] = {}
 BROWSER_LOCK = threading.Lock()
@@ -420,6 +422,32 @@ def _net_bytes(iface: str) -> tuple[int, int]:
     return (int(values[0]), int(values[8])) if len(values) > 8 else (0, 0)
 
 
+def _refresh_public_network() -> None:
+    try:
+        request = Request("https://ipwho.is/", headers={"Accept": "application/json", "User-Agent": "jiankong/1.0"})
+        with build_opener(ProxyHandler({})).open(request, timeout=7) as response:
+            data = json.loads(response.read().decode("utf-8", "replace"))
+        if not data.get("success", True) or not data.get("ip"):
+            raise ValueError(str(data.get("message") or "IP 定位服务未返回地址"))
+        location = " · ".join(part for part in (data.get("country"), data.get("region"), data.get("city")) if part)
+        with PUBLIC_NETWORK_LOCK:
+            PUBLIC_NETWORK.update({"at": time.time(), "refreshing": False, "ip": str(data["ip"]), "location": location or "位置未知", "isp": str(data.get("connection", {}).get("isp") or ""), "error": ""})
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        with PUBLIC_NETWORK_LOCK:
+            PUBLIC_NETWORK.update({"at": time.time(), "refreshing": False, "error": str(exc)[:160]})
+
+
+def public_network() -> dict:
+    now = time.time()
+    with PUBLIC_NETWORK_LOCK:
+        snapshot = dict(PUBLIC_NETWORK)
+        if now - float(snapshot["at"] or 0) > 600 and not snapshot["refreshing"]:
+            PUBLIC_NETWORK["refreshing"] = True
+            threading.Thread(target=_refresh_public_network, name="public-network", daemon=True).start()
+            snapshot["refreshing"] = True
+    return {key: snapshot.get(key) for key in ("ip", "location", "isp", "error", "refreshing")}
+
+
 def resources() -> dict:
     now = time.time()
     iface = _active_iface()
@@ -466,7 +494,7 @@ def resources() -> dict:
     def state(pct: float) -> str:
         return "danger" if pct >= 90 else ("warning" if pct >= 75 else "ok")
 
-    return {"sample": sample, "memory": {"used": mem_used, "total": mem_total, "state": state(sample["memory"]), "accounting": memory_accounting}, "disk": {"used": disk.used, "total": disk.total, "state": state(sample["disk"])}, "cpu": {"state": state(sample["cpu"])}, "network": {"iface": iface, "down": down, "up": up, "state": "ok" if iface else "danger"}, "recent": recent, "hour": hour}
+    return {"sample": sample, "memory": {"used": mem_used, "total": mem_total, "state": state(sample["memory"]), "accounting": memory_accounting}, "disk": {"used": disk.used, "total": disk.total, "state": state(sample["disk"])}, "cpu": {"state": state(sample["cpu"])}, "network": {"iface": iface, "down": down, "up": up, "state": "ok" if iface else "danger", "public": public_network()}, "recent": recent, "hour": hour}
 
 
 def systemd_units() -> dict[str, dict]:
