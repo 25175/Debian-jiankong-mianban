@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import select
+import ssl
 import shutil
 import socket
 import subprocess
@@ -167,37 +168,74 @@ def command(*args: str, timeout: int = 8, cwd: str | None = None) -> tuple[int, 
         return 127, str(exc)
 
 
+class _SNIHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection pinned to a resolved IPv4 address while retaining SNI."""
+
+    def __init__(self, hostname: str, address: str, port: int, timeout: float):
+        super().__init__(hostname, port=port, timeout=timeout, context=ssl.create_default_context())
+        self._address = address
+
+    def connect(self) -> None:
+        raw = socket.create_connection((self._address, self.port), self.timeout)
+        self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
+
+
+def _guardian_json_response(response: http.client.HTTPResponse) -> tuple[int, dict]:
+    raw = response.read().decode("utf-8", "replace")
+    try:
+        body = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        body = {"error": raw[:500] or f"Worker HTTP {response.status}"}
+    return response.status, body
+
+
 def guardian_request(method: str, endpoint: str, payload: dict | None = None) -> tuple[int, dict]:
-    """Use one authenticated Worker session; never login before every status read."""
-    global GUARDIAN_HTTP_OPENER, GUARDIAN_HTTP_BASE
+    """Call the Worker using direct HTTPS, with Cloudflare IPv4/SNI fallback."""
     ready, reason = guardian_ready()
     if not ready:
         return 503, {"ok": False, "error": reason}
     cfg, secrets_data = guardian_config(), load_guardian_secrets()
     configured = str(cfg["worker_admin_url"]).rstrip("/")
     base = (configured if configured.endswith("/cf-admin") else configured + "/cf-admin") + "/"
-    password = str(secrets_data["worker_admin_password"])
-    # Service-to-service synchronization authenticates once per request using
-    # the Worker admin secret over HTTPS. It avoids a login redirect/cookie
-    # exchange and returns the real Worker state faster.
-    headers = {"User-Agent": "jiankong/1.0", "Accept": "application/json", "X-Jiankong-Sync-Token": password}
+    target = urlsplit(urljoin(base, "guardian-api/" + endpoint.lstrip("/")))
+    if target.scheme != "https" or not target.hostname:
+        return 400, {"ok": False, "error": "Worker 管理地址必须为 HTTPS"}
+    payload_bytes = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
+    headers = {"User-Agent": "jiankong/1.0", "Accept": "application/json", "X-Jiankong-Sync-Token": str(secrets_data["worker_admin_password"])}
+    if payload_bytes:
+        headers["Content-Type"] = "application/json"
+    path = (target.path or "/") + (("?" + target.query) if target.query else "")
+    failures: list[str] = []
+    # Normal name-based connection first. This is the clean path where the VM
+    # TLS route is healthy.
     try:
-        data = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
-        request = Request(urljoin(base, "guardian-api/" + endpoint.lstrip("/")), data=data, method=method, headers={**headers, **({"Content-Type": "application/json"} if data else {})})
-        # MonkeyCode preview containers may inherit a broken HTTP(S)_PROXY; the
-        # direct Cloudflare route is the intended network path.
-        with build_opener(ProxyHandler({})).open(request, timeout=8) as response:
-            raw = response.read().decode("utf-8", "replace")
-            return response.status, json.loads(raw) if raw else {}
+        request = Request(target.geturl(), data=payload_bytes, method=method, headers=headers)
+        with build_opener(ProxyHandler({})).open(request, timeout=10) as response:
+            return _guardian_json_response(response)
     except HTTPError as exc:
-        raw = exc.read().decode("utf-8", "replace")
+        return _guardian_json_response(exc)
+    except (URLError, OSError, ValueError, ssl.SSLError) as exc:
+        failures.append(str(exc))
+    # Some MonkeyCode egress routes intermittently reset TLS after DNS routing.
+    # Retry every resolved IPv4 endpoint while preserving the domain as SNI and
+    # Host, which is equivalent to curl --resolve and still verifies TLS.
+    try:
+        addresses = list(dict.fromkeys(info[4][0] for info in socket.getaddrinfo(target.hostname, target.port or 443, socket.AF_INET, socket.SOCK_STREAM)))
+    except OSError as exc:
+        addresses = []
+        failures.append(str(exc))
+    for address in addresses:
+        connection = None
         try:
-            body = json.loads(raw)
-        except json.JSONDecodeError:
-            body = {"error": raw[:500] or f"Worker HTTP {exc.code}"}
-        return exc.code, {"ok": False, **body}
-    except (URLError, OSError, ValueError, json.JSONDecodeError) as exc:
-        return 502, {"ok": False, "error": f"Worker 通信失败：{exc}"}
+            connection = _SNIHTTPSConnection(target.hostname, address, target.port or 443, 10)
+            connection.request(method, path, body=payload_bytes, headers=headers)
+            return _guardian_json_response(connection.getresponse())
+        except (OSError, ValueError, ssl.SSLError, http.client.HTTPException) as exc:
+            failures.append(f"{address}: {exc}")
+        finally:
+            if connection:
+                connection.close()
+    return 502, {"ok": False, "error": "Worker 通信失败：" + " | ".join(failures[-3:])[:700]}
 
 
 def guardian_status() -> dict:
