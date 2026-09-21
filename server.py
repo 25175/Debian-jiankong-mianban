@@ -204,30 +204,22 @@ def guardian_request(method: str, endpoint: str, payload: dict | None = None) ->
     headers = {"User-Agent": "jiankong/1.0", "Accept": "application/json", "X-Jiankong-Sync-Token": str(secrets_data["worker_admin_password"])}
     if payload_bytes:
         headers["Content-Type"] = "application/json"
-    path = (target.path or "/") + (("?" + target.query) if target.query else "")
+    path = (target.path or "/") + ((("?" + target.query) if target.query else ""))
     failures: list[str] = []
-    # Normal name-based connection first. This is the clean path where the VM
-    # TLS route is healthy.
-    try:
-        request = Request(target.geturl(), data=payload_bytes, method=method, headers=headers)
-        with build_opener(ProxyHandler({})).open(request, timeout=10) as response:
-            return _guardian_json_response(response)
-    except HTTPError as exc:
-        return _guardian_json_response(exc)
-    except (URLError, OSError, ValueError, ssl.SSLError) as exc:
-        failures.append(str(exc))
-    # Some MonkeyCode egress routes intermittently reset TLS after DNS routing.
-    # Retry every resolved IPv4 endpoint while preserving the domain as SNI and
-    # Host, which is equivalent to curl --resolve and still verifies TLS.
+    # Resolve once, IPv4 only. MonkeyCode egress routes intermittently time out
+    # on Cloudflare anycast; connecting by name lets getaddrinfo hand back a
+    # stalled endpoint, and retrying names re-resolves the same bad address.
     try:
         addresses = list(dict.fromkeys(info[4][0] for info in socket.getaddrinfo(target.hostname, target.port or 443, socket.AF_INET, socket.SOCK_STREAM)))
     except OSError as exc:
         addresses = []
         failures.append(str(exc))
+    # Try each resolved IPv4 address once, keeping the domain as SNI/Host so TLS
+    # still verifies. Only re-resolve (by name) as a last resort.
     for address in addresses:
         connection = None
         try:
-            connection = _SNIHTTPSConnection(target.hostname, address, target.port or 443, 10)
+            connection = _SNIHTTPSConnection(target.hostname, address, target.port or 443, 8)
             connection.request(method, path, body=payload_bytes, headers=headers)
             return _guardian_json_response(connection.getresponse())
         except (OSError, ValueError, ssl.SSLError, http.client.HTTPException) as exc:
@@ -235,6 +227,16 @@ def guardian_request(method: str, endpoint: str, payload: dict | None = None) ->
         finally:
             if connection:
                 connection.close()
+    # Fall back to the plain name-based request; this is the clean path when the
+    # resolved IPv4 list above was exhausted by a transient route failure.
+    try:
+        request = Request(target.geturl(), data=payload_bytes, method=method, headers=headers)
+        with build_opener(ProxyHandler({})).open(request, timeout=8) as response:
+            return _guardian_json_response(response)
+    except HTTPError as exc:
+        return _guardian_json_response(exc)
+    except (URLError, OSError, ValueError, ssl.SSLError) as exc:
+        failures.append(str(exc))
     return 502, {"ok": False, "error": "Worker 通信失败：" + " | ".join(failures[-3:])[:700]}
 
 
@@ -368,7 +370,9 @@ def login_browser_run(action: str, payload: dict | None = None) -> dict:
     # github-url performs a real VM CDP navigation and waits for the Network
     # authorize request; 15 seconds is shorter than a cold Chromium/SPA load.
     # Capturing a real GitHub OAuth navigation may need a full SPA load.
-    timeout = 60 if action == "github-url" else 15
+    # cookie now also revives Chromium when it died (EMFILE/OOM), which needs a
+    # cold browser start plus DevTools endpoint readiness.
+    timeout = 60 if action in ("github-url", "cookie") else 15
     args = ["python3", str(LOGIN_BROWSER_SCRIPT), action]
     if payload is not None:
         args.append(json.dumps(payload, ensure_ascii=False))

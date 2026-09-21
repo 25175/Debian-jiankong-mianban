@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+import typing
 import urllib.request
 from pathlib import Path
 
@@ -42,11 +43,21 @@ def alive(path: Path) -> bool:
         return False
 
 
-def spawn(name: str, args: list[str], env: dict[str, str] | None = None) -> None:
+def spawn(name: str, args: list[str], env: dict | None = None) -> None:
     if alive(pid_path(name)):
         return
+    # Chromium in this VM repeatedly dies with EMFILE ("Too many open files")
+    # because the inherited 1024 soft fd limit is far below what a running
+    # browser plus its restarted network service needs. Raise it for the whole
+    # browser process tree; the hard limit (4096) is untouched.
+    preexec: typing.Callable[[], None] | None = None
+    if name == "chromium":
+        def preexec() -> None:
+            import resource
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
     with LOG.open("ab") as log:
-        proc = subprocess.Popen(args, env=env, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+        proc = subprocess.Popen(args, env=env, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True, preexec_fn=preexec)
     pid_path(name).write_text(str(proc.pid))
 
 
@@ -237,7 +248,11 @@ if __name__ == "__main__":
     elif action == "github-url":
         print(json.dumps(github_login_url(), ensure_ascii=False))
     elif action == "cookie":
-        # Never print cookie outside an authenticated server-side caller.
+        # Chromium can be dead (EMFILE crash, OOM, manual kill) while its pid
+        # file lingers. A cookie read then fails with a confusing "DevTools
+        # 暂时无响应" instead of restarting the browser. Bring it back first;
+        # start() is a no-op for everything already alive.
+        start()
         print(json.dumps(cookie(), ensure_ascii=False))
     else:
         raise SystemExit("usage: monkeycode_browser.py [install|start|restart|status|github-url|cookie]")
