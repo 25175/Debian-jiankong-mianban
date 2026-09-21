@@ -158,6 +158,11 @@ BROWSER_LOCK = threading.Lock()
 BROWSER_TTL = 300
 SERVICE_TARGETS: dict[str, dict] = {}
 SERVICE_LOCK = threading.Lock()
+# Last cookie value automatically synced to the Worker, so the watcher only
+# pushes when the VM browser session actually changed (new login / refresh).
+AUTO_SYNC_LOCK = threading.Lock()
+AUTO_SYNC_LAST: str = ""
+AUTO_SYNC_INTERVAL = 60
 
 
 def command(*args: str, timeout: int = 8, cwd: str | None = None) -> tuple[int, str]:
@@ -402,6 +407,53 @@ def login_browser_run(action: str, payload: dict | None = None) -> dict:
 
 def login_browser_url(host_header: str) -> str | None:
     return service_public_url(host_header, LOGIN_BROWSER_PORT, "https://{preview_host}/vnc.html?autoconnect=true&resize=remote")
+
+
+def sync_login_browser_cookie() -> dict:
+    """Push the VM browser cookie to the Worker, exactly like the manual button.
+
+    Called by both the /api/login-browser/sync endpoint and the background
+    watcher, so manual and automatic sync share one identical code path.
+    """
+    browser_cookie = login_browser_run("cookie")
+    cookie_value = browser_cookie["cookie"]
+    code, response = guardian_request("POST", "credential", {"cookie": cookie_value, "expiresAt": browser_cookie.get("expiresAt")})
+    return {"code": code, "ok": code == 200 and bool(response.get("ok")), "cookie": cookie_value, "expiresAt": browser_cookie.get("expiresAt"), "worker": response}
+
+
+def auto_sync_watcher() -> None:
+    """Detect a changed VM browser cookie and sync it to the Worker automatically.
+
+    Without this, a VNC re-login only updates Chromium locally; the Worker keeps
+    the stale cookie until someone opens the panel and clicks "同步 Worker".
+    The Worker endpoint is idempotent for an unchanged cookie, but we still skip
+    the request when the value is identical to the last push.
+    """
+    while True:
+        time.sleep(AUTO_SYNC_INTERVAL)
+        global AUTO_SYNC_LAST
+        if not guardian_ready()[0] or not LOGIN_BROWSER_SCRIPT.exists():
+            continue
+        try:
+            current = login_browser_run("cookie")["cookie"]
+        except (RuntimeError, KeyError):
+            # Chromium down (EMFILE/OOM) or not logged in yet; start() inside
+            # the cookie action will revive it, so just wait for the next tick.
+            continue
+        with AUTO_SYNC_LOCK:
+            if current == AUTO_SYNC_LAST:
+                continue
+        try:
+            result = sync_login_browser_cookie()
+        except RuntimeError:
+            continue
+        if result.get("ok"):
+            with AUTO_SYNC_LOCK:
+                AUTO_SYNC_LAST = result["cookie"]
+            guardian_event("自动同步", True, "VM 浏览器 Cookie 变化已自动同步到 Worker")
+        else:
+            error = (result.get("worker") or {}).get("error") or "Worker 未确认"
+            guardian_event("自动同步", False, str(error)[:200])
 
 
 def _prune_browser_tokens() -> None:
@@ -1091,9 +1143,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(401, {"error": "需要控制令牌或手机控制页会话"})
                 return
             try:
-                browser_cookie = login_browser_run("cookie")
-                code, response = guardian_request("POST", "credential", {"cookie": browser_cookie["cookie"], "expiresAt": browser_cookie.get("expiresAt")})
-                self.send_json(code, {"ok": code == 200 and bool(response.get("ok")), "browser": {"expiresAt": browser_cookie.get("expiresAt")}, "worker": response})
+                result = sync_login_browser_cookie()
+                # Keep the watcher in sync so it does not re-push this cookie.
+                if result.get("ok"):
+                    with AUTO_SYNC_LOCK:
+                        AUTO_SYNC_LAST = result["cookie"]
+                self.send_json(result["code"], {"ok": result["ok"], "browser": {"expiresAt": result.get("expiresAt")}, "worker": result.get("worker")})
             except RuntimeError as exc:
                 self.send_json(503, {"error": str(exc)})
             return
@@ -1161,4 +1216,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    threading.Thread(target=auto_sync_watcher, name="auto-sync", daemon=True).start()
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
