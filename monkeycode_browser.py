@@ -143,7 +143,11 @@ def start() -> dict:
         pid_path("vnc").write_text(str(proc.pid))
     spawn("novnc", ["websockify", "--web", "/usr/share/novnc", str(PORT), f"localhost:{VNC}"])
     if not alive(pid_path("chromium")):
-        spawn("chromium", ["chromium", "--no-sandbox", "--disable-dev-shm-usage", "--lang=zh-CN", "--accept-lang=zh-CN,zh", "--user-data-dir=" + str(PROFILE), "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=" + str(CDP), TARGET], env)
+        # This VM runs with ~8GB RAM and no swap; a full Chromium with default
+        # process counts OOMs within minutes. Cap renderer/GPU processes and
+        # disable the memory-hungry background services the login browser does
+        # not need.
+        spawn("chromium", ["chromium", "--no-sandbox", "--disable-dev-shm-usage", "--lang=zh-CN", "--accept-lang=zh-CN,zh", "--user-data-dir=" + str(PROFILE), "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=" + str(CDP), "--renderer-process-limit=2", "--gpu-process-limit=1", "--disable-background-networking", "--disable-component-update", "--disable-default-apps", "--disable-extensions", "--disable-gpu", "--disable-sync", "--no-first-run", "--disable-features=GCM", TARGET], env)
     time.sleep(2)
     return status()
 
