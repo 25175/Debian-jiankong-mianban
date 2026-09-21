@@ -447,9 +447,16 @@ def auto_sync_watcher() -> None:
             result = sync_login_browser_cookie()
         except RuntimeError:
             continue
-        if result.get("ok"):
+        # Update the baseline whenever the Worker actually accepted the push
+        # (HTTP 200). Re-loginning to a bad session should not retry every
+        # tick: the cookie only becomes valid after a real VNC login changes
+        # it again, and the Worker endpoint is idempotent for a repeat value.
+        code = result.get("code")
+        accepted = code == 200 and not (result.get("worker") or {}).get("error")
+        if accepted:
             with AUTO_SYNC_LOCK:
-                AUTO_SYNC_LAST = result["cookie"]
+                AUTO_SYNC_LAST = current
+        if result.get("ok"):
             guardian_event("自动同步", True, "VM 浏览器 Cookie 变化已自动同步到 Worker")
         else:
             error = (result.get("worker") or {}).get("error") or "Worker 未确认"
@@ -540,29 +547,46 @@ def _read_json(opener, url: str, headers: dict) -> dict:
 
 
 def _refresh_public_network() -> None:
+    # Each probe degrades independently: a blocked or rate-limited service must
+    # not discard the other result. IP services are notoriously flaky from a
+    # multi-route VM (ipify returns a different egress per request, ipinfo 429s,
+    # ipapi.co 403s), so prefer the endpoints that proved stable here.
+    opener = build_opener(ProxyHandler({}))
+    headers = {"Accept": "text/plain,application/json,*/*", "User-Agent": "Mozilla/5.0"}
+    domestic: dict = {}
+    international: dict = {}
+    errors: list[str] = []
+
+    # International egress: Cloudflare's trace endpoint is stable, not
+    # rate-limited, and reports both the client IP and the colo location, so it
+    # replaces the ipify + ip-api two-step whose answers jumped between egresses.
     try:
-        opener = build_opener(ProxyHandler({}))
-        headers = {"Accept": "application/json,text/plain,*/*", "User-Agent": "jiankong/1.0"}
-        # Probe two independent egress paths. The international probe uses a
-        # global IP service; the domestic probe uses an in-China IP service.
-        # They can legitimately return different addresses on multi-route VMs.
-        overseas_ip = str(_read_json(opener, "https://api.ipify.org?format=json", headers).get("ip") or "")
-        if not overseas_ip:
-            raise ValueError("海外出口 IP 服务未返回地址")
-        geo = _read_json(opener, "http://ip-api.com/json/" + overseas_ip, headers)
-        if geo.get("status") != "success":
-            raise ValueError(str(geo.get("message") or "海外出口位置查询失败"))
-        domestic_raw = ""
+        with opener.open(Request("https://www.cloudflare.com/cdn-cgi/trace", headers=headers), timeout=8) as response:
+            trace = dict((line.split("=", 1) for line in response.read().decode("utf-8", "replace").split() if "=" in line))
+        ip = str(trace.get("ip") or "").strip()
+        loc = str(trace.get("loc") or "").strip()
+        colo = str(trace.get("colo") or "").strip()
+        if ip:
+            location = f"{loc} · 节点 {colo}" if loc and colo else (loc or "位置未知")
+            international = {"ip": ip, "location": location, "isp": colo or ""}
+    except (OSError, ValueError) as exc:
+        errors.append(f"国际出口：{exc}")
+
+    # Domestic egress: myip.ipip.net is the only in-China service that stayed
+    # reachable and returned a stable address plus location in one request.
+    try:
         with opener.open(Request("https://myip.ipip.net", headers=headers), timeout=8) as response:
             domestic_raw = response.read().decode("utf-8", "replace").strip()
-        matched = re.search(r"当前\s*IP[：:]\s*([0-9a-fA-F:.]+)\s+来自于[：:]\s*(.+)", domestic_raw)
-        domestic = {"ip": matched.group(1), "location": matched.group(2).strip(), "isp": ""} if matched else {"ip": "", "location": domestic_raw[:180] or "查询失败", "isp": ""}
-        international = {"ip": overseas_ip, "location": " · ".join(part for part in (geo.get("country"), geo.get("regionName"), geo.get("city")) if part) or "位置未知", "isp": str(geo.get("isp") or "")}
-        with PUBLIC_NETWORK_LOCK:
-            PUBLIC_NETWORK.update({"at": time.time(), "refreshing": False, "domestic": domestic, "international": international, "error": ""})
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        with PUBLIC_NETWORK_LOCK:
-            PUBLIC_NETWORK.update({"at": time.time(), "refreshing": False, "error": str(exc)[:160]})
+        matched = re.search(r"当前\s*IP[：:]?\s*([0-9a-fA-F:.]+)\s*来自于[：:]?\s*(.+)", domestic_raw)
+        if matched:
+            domestic = {"ip": matched.group(1), "location": matched.group(2).strip(), "isp": ""}
+        else:
+            errors.append(f"国内出口：返回格式无法解析（{domestic_raw[:80]}）")
+    except (OSError, ValueError) as exc:
+        errors.append(f"国内出口：{exc}")
+
+    with PUBLIC_NETWORK_LOCK:
+        PUBLIC_NETWORK.update({"at": time.time(), "refreshing": False, "domestic": domestic, "international": international, "error": "；".join(errors)[:160] or ""})
 
 
 def public_network() -> dict:
