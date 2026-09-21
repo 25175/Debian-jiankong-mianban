@@ -214,12 +214,27 @@ def guardian_request(method: str, endpoint: str, payload: dict | None = None) ->
     except OSError as exc:
         addresses = []
         failures.append(str(exc))
-    # Try each resolved IPv4 address once, keeping the domain as SNI/Host so TLS
-    # still verifies. Only re-resolve (by name) as a last resort.
-    for address in addresses:
+    # Try each resolved IPv4 address, keeping the domain as SNI/Host so TLS
+    # still verifies. Sort healthy endpoints first: this VM's egress reaches
+    # 104.21.19.6 in 0.4s but 172.67.184.94 always times out (8s), and DNS
+    # returns the dead endpoint first. Connect-TCP probes are cheap and let a
+    # dead anycast address fail in ~1s instead of burning the full timeout.
+    def reachable(address: str, port: int) -> bool:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(1.0)
+        try:
+            probe.connect((address, port))
+            return True
+        except OSError:
+            return False
+        finally:
+            probe.close()
+    port = target.port or 443
+    ordered = sorted(addresses, key=lambda a: reachable(a, port), reverse=True)
+    for address in ordered:
         connection = None
         try:
-            connection = _SNIHTTPSConnection(target.hostname, address, target.port or 443, 8)
+            connection = _SNIHTTPSConnection(target.hostname, address, port, 8)
             connection.request(method, path, body=payload_bytes, headers=headers)
             return _guardian_json_response(connection.getresponse())
         except (OSError, ValueError, ssl.SSLError, http.client.HTTPException) as exc:
