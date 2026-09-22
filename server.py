@@ -159,6 +159,13 @@ BROWSER_LOCK = threading.Lock()
 BROWSER_TTL = 300
 SERVICE_TARGETS: dict[str, dict] = {}
 SERVICE_LOCK = threading.Lock()
+PERSIST_STOP_PATH = BASE / "data" / "persist-stop.json"
+PERSIST_STOP_LOCK = threading.Lock()
+PERSIST_STOP: set[str] = set()
+# Processes the platform (agent) respawns on demand. Only these may be
+# persistently suppressed, because killing them never breaks the keepalive
+# chain (jiankong -> Worker -> cookie -> Task) or the remote terminal.
+PERSIST_STOPPABLE = ("opencode",)
 # Last cookie value automatically synced to the Worker, so the watcher only
 # pushes when the VM browser session actually changed (new login / refresh).
 AUTO_SYNC_LOCK = threading.Lock()
@@ -774,7 +781,14 @@ def service_status(host_header: str = "") -> list[dict]:
                 # from the web UI - it would kill the management connection.
                 self_kill = item.get("port") == PORT and ("server.py" in cmdline or proc.startswith("python"))
                 agent_link = "/app/agent/bin/agent" in cmdline or proc == "agent"
-                actions = [] if (self_kill or agent_link) else ["stop"]
+                if self_kill or agent_link:
+                    actions = []
+                elif "opencode" in proc or "opencode" in cmdline:
+                    # The agent respawns this on demand; the user can ask for a
+                    # persistent kill, which the suppressor loop then enforces.
+                    actions = ["stop", "persist-stop", "persist-allow"]
+                else:
+                    actions = ["stop"]
         managed = not item["unit"] and actions and not any(
             (item.get("process") or "").lower().startswith(p) for p in ("x11vnc", "websockify", "chromium"))
         item.update({**{"key": item_id, "title": title, "detail": rule.get("description") or f"{item['address']} · {item['process'] or '监听进程'}"}, "actions": actions, "managed": managed, "url": rule.get("url"), "link_label": rule.get("link_label"), "ok": True, **process_memory(item["pid"])})
@@ -905,17 +919,89 @@ def installed_agents() -> list[dict]:
 def status(host_header: str = "") -> dict:
     items = service_status(host_header)
     agents = installed_agents()
-    return {"dashboard_name": CONFIG.get("name", "Debian 服务监控面板"), "generated_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"), "host": socket.gethostname(), "monitor_port": PORT, "all_ok": all(x["ok"] for x in items), "items": items, "agents": agents, "plugins": plugins(host_header), "uptime_seconds": int(time.time() - STARTED), "resources": resources()}
+    return {"dashboard_name": CONFIG.get("name", "Debian 服务监控面板"), "generated_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"), "host": socket.gethostname(), "monitor_port": PORT, "all_ok": all(x["ok"] for x in items), "items": items, "agents": agents, "plugins": plugins(host_header), "uptime_seconds": int(time.time() - STARTED), "resources": resources(), "persist_stop": sorted(persist_stop_load())}
 
 
 SELF_PID = os.getpid()
 
 
+def persist_stop_load() -> set[str]:
+    """Targets the user asked to keep killed (opencode and friends)."""
+    global PERSIST_STOP
+    try:
+        raw = json.loads(PERSIST_STOP_PATH.read_text(encoding="utf-8"))
+        loaded = {k for k, v in raw.items() if v is True}
+    except (OSError, ValueError, json.JSONDecodeError):
+        loaded = set()
+    with PERSIST_STOP_LOCK:
+        PERSIST_STOP = loaded
+    return loaded
+
+
+def persist_stop_save() -> None:
+    try:
+        PERSIST_STOP_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with PERSIST_STOP_LOCK:
+            data = {k: True for k in PERSIST_STOP}
+        atomic_json_write(PERSIST_STOP_PATH, data, 0o600)
+    except OSError:
+        pass
+
+
+def persist_stop_suppress() -> None:
+    """Kill anything the user wants gone and the platform keeps restarting.
+
+    The agent respawns opencode (an ACP helper, listening on 127.0.0.1) whenever
+    it needs coding capabilities, so a plain kill is not enough - this loop is
+    what makes "persistent" actually persistent. It never touches the agent
+    itself: the agent is the parent of the remote terminal and a party to the
+    keepalive chain, so killing it would break both.
+    """
+    while True:
+        try:
+            targets = persist_stop_load()
+            for key in list(targets):
+                with SERVICE_LOCK:
+                    item = dict(SERVICE_TARGETS.get(key, {}))
+                proc = (item.get("process") or "").lower()
+                if not any(p in proc for p in PERSIST_STOPPABLE):
+                    continue
+                pid = int(item.get("pid") or 0)
+                if not pid:
+                    continue
+                try:
+                    os.kill(pid, 15)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+        except Exception:  # noqa: BLE001 - suppressor must never die
+            pass
+        time.sleep(20)
+
+
 def allowed_action(target: str, action: str) -> tuple[bool, str]:
     with SERVICE_LOCK:
         item = dict(SERVICE_TARGETS.get(target, {}))
-    if not item or action not in ("start", "restart", "stop") or action not in item.get("actions", []):
+    if not item or action not in ("start", "restart", "stop", "persist-stop", "persist-allow") or action not in item.get("actions", []):
         return False, "不允许的操作：目标必须是自动发现或配置的 user service。"
+    if action in ("persist-stop", "persist-allow"):
+        proc = (item.get("process") or "").lower()
+        if not any(p in proc for p in PERSIST_STOPPABLE):
+            return False, "该服务由平台按需管理，不支持持久化停止；只能立即停止。"
+        with PERSIST_STOP_LOCK:
+            if action == "persist-stop":
+                PERSIST_STOP.add(target)
+            else:
+                PERSIST_STOP.discard(target)
+        persist_stop_save()
+        # An immediate kill makes the effect visible before the next loop tick.
+        if action == "persist-stop":
+            pid = int(item.get("pid") or 0)
+            if pid:
+                try:
+                    os.kill(pid, 15)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+        return True, ("已持久化停止：" if action == "persist-stop" else "已恢复自动启动：") + (item.get("title") or target)
     unit = item.get("unit")
     if unit:
         code, output = command("systemctl", "--user", action, unit, timeout=20)
@@ -1331,6 +1417,8 @@ def watchdog_supervisor() -> None:
 if __name__ == "__main__":
     threading.Thread(target=auto_sync_watcher, name="auto-sync", daemon=True).start()
     threading.Thread(target=watchdog_supervisor, name="watchdog-keeper", daemon=True).start()
+    threading.Thread(target=persist_stop_suppress, name="persist-stop", daemon=True).start()
+    persist_stop_load()
     # Watchdog loop: if the HTTP server dies (crash, OOM kill, port race), the
     # whole process exits and this loop restarts it. firecracker-init does not
     # supervise jiankong, so it must supervise itself.
