@@ -707,9 +707,9 @@ def listening_ports() -> list[dict]:
                 port = int(fields[3].rsplit(":", 1)[-1].rstrip("]"))
             except ValueError:
                 continue
-            match = re.search(r'users:\(("([^"]+)",pid=(\d+)', " ".join(fields[4:]))
-            pid = int(match.group(3)) if match else 0
-            process_name = match.group(2) if match else ""
+            match = re.search(r'users:\(+"([^"]+)",pid=(\d+)', " ".join(fields[4:]))
+            pid = int(match.group(2)) if match else 0
+            process_name = match.group(1) if match else ""
             ports.append({"port": port, "pid": pid, "process": process_name, "address": fields[3]})
     data = sorted({(x["port"], x["pid"], x["process"]): x for x in ports}.values(), key=lambda x: x["port"])
     with PORT_SCAN_LOCK:
