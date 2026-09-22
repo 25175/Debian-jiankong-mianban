@@ -61,12 +61,20 @@ PORT = 8888
 
 
 def health() -> bool:
-    """Quick local probe - a live listener answering on 127.0.0.1 means up."""
+    """Quick local probe - a live listener answering on 127.0.0.1 means up.
+
+    /api/status requires the control token since the read-only lockdown, so a
+    401 there is proof the server is alive and enforcing auth - not a hang.
+    """
+    import urllib.error
     import urllib.request
 
     try:
         urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/status", timeout=8)
         return True
+    except urllib.error.HTTPError as e:
+        # 401/403 = the handler ran and refused us; server is up.
+        return e.code in (401, 403)
     except Exception:
         return False
 
