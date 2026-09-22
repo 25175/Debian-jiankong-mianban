@@ -34,7 +34,7 @@ LOCAL_CONFIG_PATH = BASE / "jiankong.local.json"
 TOKEN_PATH = BASE / "control-token"
 STARTED = time.time()
 CONFIG_DEFAULT = {
-    "name": "Debian 服务监控面板",
+    "name": "服务监控面板",
     "listen": {"host": "0.0.0.0", "port": 8888},
     "services": [],
     "browser": {"enabled": True, "port": None},
@@ -116,7 +116,23 @@ def guardian_ready() -> tuple[bool, str]:
 CONFIG = load_config()
 HOST = str(CONFIG["listen"].get("host") or "0.0.0.0")
 PORT = int(CONFIG["listen"].get("port") or 8888)
-TOKEN = TOKEN_PATH.read_text(encoding="utf-8").strip() if TOKEN_PATH.exists() else ""
+# The panel gates every read endpoint behind a login password. The default is
+# "1" so a fresh deploy works out of the box; writing control-token replaces it.
+DEFAULT_PASSWORD = "1"
+TOKEN = ""
+
+
+def control_password() -> str:
+    """Login password, defaulting to "1" when control-token is absent/empty."""
+    global TOKEN
+    if not TOKEN:
+        try:
+            TOKEN = TOKEN_PATH.read_text(encoding="utf-8").strip()
+        except OSError:
+            TOKEN = ""
+        if not TOKEN:
+            TOKEN = DEFAULT_PASSWORD
+    return TOKEN
 GUARDIAN_SECRET_PATH = BASE / "cloudflare-guardian-secret.json"
 GUARDIAN_LOCK = threading.Lock()
 GUARDIAN_HISTORY: collections.deque = collections.deque(maxlen=80)
@@ -326,6 +342,22 @@ def guardian_action(action_id: str) -> dict | None:
         return dict(value) if value else None
 
 
+def persist_guardian(next_guardian: dict, password: str = "") -> dict:
+    """Write the guardian config to the ignored per-server override file.
+
+    Runtime setup belongs there (not in repository defaults) so a future git
+    update cannot discard credentials or the connected MonkeyCode target.
+    """
+    persisted = json_file(LOCAL_CONFIG_PATH)
+    persisted["cloudflare_guardian"] = next_guardian
+    atomic_json_write(LOCAL_CONFIG_PATH, persisted, 0o600)
+    if password:
+        secret = load_guardian_secrets()
+        secret["worker_admin_password"] = password
+        atomic_json_write(GUARDIAN_SECRET_PATH, secret, 0o600)
+    return {"worker_admin_url": next_guardian["worker_admin_url"], "enabled": next_guardian["enabled"], "password_saved": bool(load_guardian_secrets().get("worker_admin_password")), "worker_config": next_guardian["worker_config"]}
+
+
 def save_guardian_setup(body: dict) -> dict:
     global CONFIG
     current = guardian_config()
@@ -340,17 +372,49 @@ def save_guardian_setup(body: dict) -> dict:
         "worker_config": merge_config(current.get("worker_config", {}), dict(body.get("worker_config") or {})),
     })
     CONFIG = merge_config(CONFIG, {"cloudflare_guardian": next_guardian})
-    # Runtime setup belongs to the ignored per-server override; do not mutate
-    # repository defaults and lose it on a future git update.
-    persisted = json_file(LOCAL_CONFIG_PATH)
-    persisted["cloudflare_guardian"] = next_guardian
-    atomic_json_write(LOCAL_CONFIG_PATH, persisted, 0o600)
-    password = str(body.get("worker_admin_password") or "").strip()
-    if password:
-        secret = load_guardian_secrets()
-        secret["worker_admin_password"] = password
-        atomic_json_write(GUARDIAN_SECRET_PATH, secret, 0o600)
-    return {"worker_admin_url": next_guardian["worker_admin_url"], "enabled": next_guardian["enabled"], "password_saved": bool(load_guardian_secrets().get("worker_admin_password")), "worker_config": next_guardian["worker_config"]}
+    return persist_guardian(next_guardian, str(body.get("worker_admin_password") or "").strip())
+
+
+def quick_worker_setup(worker_domain: str, admin_password: str, host_header: str = "") -> dict:
+    """One-field Worker onboarding: a work domain configures everything.
+
+    Derives the admin URL, the upstream origin and the task id from the single
+    domain the user actually knows, then writes local config and pushes KV.
+    """
+    domain = str(worker_domain or "").strip().lower()
+    domain = re.sub(r"^https?://", "", domain).rstrip("/")
+    if not re.fullmatch(r"[a-z0-9._-]+\.[a-z]{2,}", domain):
+        raise ValueError("请输入有效的 work 域名，例如 ce.example.com")
+    # The preview host of this monitor is <port>-<env hex>.monkeycode-ai.online;
+    # the 8787 upstream of the same environment shares the env hex.
+    preview_host = public_host(host_header or "")
+    upstream = ""
+    task_id = ""
+    match = re.match(r"^\d+-(?P<hex>[0-9a-f]{16})\.monkeycode-ai\.online$", preview_host)
+    if match:
+        upstream = f"https://8787-{match.group('hex')}.monkeycode-ai.online"
+    # Discover the task id from the platform API of the same environment.
+    if upstream:
+        try:
+            request = Request(f"{upstream}/api/tasks", headers={"User-Agent": "jiankong/1.0"})
+            with build_opener(ProxyHandler({})).open(request, timeout=6) as response:
+                tasks = json.loads(response.read().decode("utf-8", "replace"))
+            ids = [str(t.get("id") or t.get("uuid") or "") for t in tasks] if isinstance(tasks, list) else [str(tasks.get("id") or tasks.get("uuid") or "")] if isinstance(tasks, dict) else []
+            task_id = next((i for i in ids if i), "")
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+    next_guardian = merge_config(guardian_config(), {
+        "enabled": True,
+        "worker_admin_url": f"https://{domain}/cf-admin/",
+        "worker_config": {"upstreamOrigin": upstream, "taskId": task_id, "enabled": True},
+    })
+    global CONFIG
+    CONFIG = merge_config(CONFIG, {"cloudflare_guardian": next_guardian})
+    saved = persist_guardian(next_guardian, str(admin_password or "").strip())
+    # Write to Worker KV immediately so the connection is live on save.
+    code, response = guardian_request("PUT", "config", next_guardian.get("worker_config", {}))
+    guardian_event("一键接入", code == 200 and not response.get("error"), response.get("error") or f"已通过 {domain} 接入 Worker，配置已写入 KV")
+    return {"ok": code == 200 and not response.get("error"), "setup": saved, "worker": response, "derived": {"upstreamOrigin": upstream, "taskId": task_id}}
 
 
 def guardian_event(kind: str, ok: bool, message: str) -> None:
@@ -940,7 +1004,7 @@ def installed_agents() -> list[dict]:
 def status(host_header: str = "") -> dict:
     items = service_status(host_header)
     agents = installed_agents()
-    return {"dashboard_name": CONFIG.get("name", "Debian 服务监控面板"), "generated_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"), "host": socket.gethostname(), "monitor_port": PORT, "all_ok": all(x["ok"] for x in items), "items": items, "agents": agents, "plugins": plugins(host_header), "uptime_seconds": int(time.time() - STARTED), "resources": resources(), "persist_stop": sorted(persist_stop_load())}
+    return {"dashboard_name": CONFIG.get("name", "服务监控面板"), "generated_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"), "host": socket.gethostname(), "monitor_port": PORT, "all_ok": all(x["ok"] for x in items), "items": items, "agents": agents, "plugins": plugins(host_header), "uptime_seconds": int(time.time() - STARTED), "resources": resources(), "persist_stop": sorted(persist_stop_load())}
 
 
 SELF_PID = os.getpid()
@@ -1131,7 +1195,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def authorized(self) -> bool:
-        return bool(TOKEN) and self.headers.get("X-Jiankong-Token", "") == TOKEN
+        return bool(control_password()) and self.headers.get("X-Jiankong-Token", "") == control_password()
 
     def browser_authorized(self) -> bool:
         return browser_session(self.headers.get("Cookie", ""))
@@ -1267,7 +1331,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if asset_path == "/api/login-browser/status":
             if not self.authorized():
-                self.send_json(401, {"error": "需要控制令牌"})
+                self.send_json(401, {"error": "需要登录密码"})
                 return
             try:
                 self.send_json(200, {"browser": login_browser_run("status"), "url": login_browser_url(self.headers.get("Host", ""))})
@@ -1278,25 +1342,25 @@ class Handler(BaseHTTPRequestHandler):
             # Read-only Worker state, but it exposes the upstream origin, taskId
             # and credential health, so it needs the same token as everything else.
             if not self.authorized():
-                self.send_json(401, {"error": "需要控制令牌"})
+                self.send_json(401, {"error": "需要登录密码"})
                 return
             self.send_json(200, guardian_status())
             return
         if asset_path == "/api/status":
             if not self.authorized():
-                self.send_json(401, {"error": "需要控制令牌"})
+                self.send_json(401, {"error": "需要登录密码"})
                 return
             self.send_json(200, status(self.headers.get("Host", "")))
             return
         if asset_path == "/api/resources":
             if not self.authorized():
-                self.send_json(401, {"error": "需要控制令牌"})
+                self.send_json(401, {"error": "需要登录密码"})
                 return
             self.send_json(200, resources())
             return
         if asset_path.startswith("/api/logs"):
             if not self.authorized():
-                self.send_json(401, {"error": "需要控制令牌"})
+                self.send_json(401, {"error": "需要登录密码"})
                 return
             target = parse_qs(urlsplit(self.path).query).get("target", [""])[0]
             ok, output = logs(target)
@@ -1305,9 +1369,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": "Not found"})
 
     def do_POST(self) -> None:
+        if self.path == "/api/guardian/quick-setup":
+            if not self.authorized():
+                self.send_json(401, {"error": "登录密码无效"})
+                return
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+                result = quick_worker_setup(str(body.get("worker_domain", "")), str(body.get("worker_admin_password", "")), self.headers.get("Host", ""))
+                self.send_json(200 if result.get("ok") else 502, result)
+            except (ValueError, OSError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+            return
         if self.path == "/api/guardian/setup":
             if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
+                self.send_json(401, {"error": "登录密码无效"})
                 return
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
@@ -1319,7 +1394,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/guardian/apply":
             if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
+                self.send_json(401, {"error": "登录密码无效"})
                 return
             payload = guardian_config().get("worker_config", {})
             code, response = guardian_request("PUT", "config", payload)
@@ -1329,7 +1404,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/login-browser/reset":
             if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
+                self.send_json(401, {"error": "登录密码无效"})
                 return
             try:
                 browser = login_browser_run("restart")
@@ -1339,7 +1414,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/login-browser/start":
             if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
+                self.send_json(401, {"error": "登录密码无效"})
                 return
             try:
                 browser = login_browser_run("start")
@@ -1349,7 +1424,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/login-browser/stop":
             if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
+                self.send_json(401, {"error": "登录密码无效"})
                 return
             try:
                 browser = login_browser_run("stop")
@@ -1359,7 +1434,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/login-browser/sync":
             if not (self.authorized() or self.browser_authorized()):
-                self.send_json(401, {"error": "需要控制令牌或手机控制页会话"})
+                self.send_json(401, {"error": "需要登录密码"})
                 return
             try:
                 result = sync_login_browser_cookie()
@@ -1373,7 +1448,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/guardian/credential":
             if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
+                self.send_json(401, {"error": "登录密码无效"})
                 return
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
@@ -1384,28 +1459,28 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/guardian/keepalive":
             if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
+                self.send_json(401, {"error": "登录密码无效"})
                 return
             action = new_guardian_action("立即保活", "trigger")
             self.send_json(202, {"ok": True, "action": action, "message": "已提交实时保活；正在等待 Worker 确认"})
             return
         if self.path == "/api/guardian/probe":
             if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
+                self.send_json(401, {"error": "登录密码无效"})
                 return
             action = new_guardian_action("上游探测", "probe")
             self.send_json(202, {"ok": True, "action": action, "message": "已提交实时上游探测"})
             return
         if self.path.startswith("/api/guardian/actions/"):
             if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
+                self.send_json(401, {"error": "登录密码无效"})
                 return
             action = guardian_action(self.path.rsplit("/", 1)[-1])
             self.send_json(200 if action else 404, action or {"error": "操作记录不存在或已过期"})
             return
         if self.path == "/api/plugins/toggle":
             if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
+                self.send_json(401, {"error": "登录密码无效"})
                 return
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
@@ -1415,7 +1490,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/browser-session":
             if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
+                self.send_json(401, {"error": "登录密码无效"})
                 return
             self.send_json(200, {"url": "/browser/launch?ticket=" + browser_ticket()})
             return
@@ -1423,7 +1498,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "Not found"})
             return
         if not self.authorized():
-            self.send_json(401, {"error": "控制令牌无效"})
+            self.send_json(401, {"error": "登录密码无效"})
             return
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
