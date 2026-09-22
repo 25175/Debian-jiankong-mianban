@@ -960,14 +960,20 @@ def persist_stop_suppress() -> None:
     while True:
         try:
             targets = persist_stop_load()
-            for key in list(targets):
-                with SERVICE_LOCK:
-                    item = dict(SERVICE_TARGETS.get(key, {}))
+            if not targets:
+                time.sleep(20)
+                continue
+            # Re-scan so we kill the *current* PID: the agent respawns the
+            # process and SERVICE_TARGETS would otherwise hold a stale one.
+            fresh = service_status()
+            for item in fresh:
+                if item.get("key") not in targets:
+                    continue
                 proc = (item.get("process") or "").lower()
                 if not any(p in proc for p in PERSIST_STOPPABLE):
                     continue
                 pid = int(item.get("pid") or 0)
-                if not pid:
+                if not pid or pid == SELF_PID:
                     continue
                 try:
                     os.kill(pid, 15)
