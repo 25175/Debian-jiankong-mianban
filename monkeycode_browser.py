@@ -27,6 +27,9 @@ LOG = DATA / "browser.log"
 PORT = 6080
 VNC = 5900
 CDP = 9223
+# Chromium 152 listens on [::1] for --remote-debugging-address=127.0.0.1;
+# pages() picks the working stack and caches it here for the whole run.
+CDP_HOST: list[str] = ["127.0.0.1"]
 TARGET = "https://monkeycode-ai.com/console/tasks"
 VNC_PASSWORD = "1"
 REQUIRED_COMMANDS = ("Xvfb", "fluxbox", "x11vnc", "websockify", "chromium")
@@ -164,16 +167,21 @@ def pages() -> list[dict]:
     navigating or opening a new target. Retry a few times and let callers decide
     whether an empty snapshot is recoverable.
     """
+    # Chromium 152 binds DevTools to [::1] even when launched with
+    # --remote-debugging-address=127.0.0.1, so the IPv4 URL gets refused.
+    # Probe both stacks; the address that accepts /json/list wins.
     last_error: Exception | None = None
     for attempt in range(3):
-        try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{CDP}/json/list", timeout=2) as response:
-                value = json.load(response)
-            return value if isinstance(value, list) else []
-        except (OSError, TimeoutError, ValueError) as exc:
-            last_error = exc
-            if attempt < 2:
-                time.sleep(0.15 * (attempt + 1))
+        for host in ("127.0.0.1", "[::1]"):
+            try:
+                with urllib.request.urlopen(f"http://{host}:{CDP}/json/list", timeout=2) as response:
+                    value = json.load(response)
+                CDP_HOST[0] = host
+                return value if isinstance(value, list) else []
+            except (OSError, TimeoutError, ValueError) as exc:
+                last_error = exc
+        if attempt < 2:
+            time.sleep(0.15 * (attempt + 1))
     raise RuntimeError(f"VM Chromium DevTools {CDP} 暂时无响应：{last_error}")
 
 
