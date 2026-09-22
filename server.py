@@ -981,7 +981,9 @@ def persist_stop_suppress() -> None:
                     pass
         except Exception:  # noqa: BLE001 - suppressor must never die
             pass
-        time.sleep(20)
+        # The agent relaunches the process within seconds of the kill, so the
+        # loop must run far faster than the respawn to keep it suppressed.
+        time.sleep(3)
 
 
 def allowed_action(target: str, action: str) -> tuple[bool, str]:
