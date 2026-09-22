@@ -990,7 +990,10 @@ def allowed_action(target: str, action: str) -> tuple[bool, str]:
     with SERVICE_LOCK:
         item = dict(SERVICE_TARGETS.get(target, {}))
     if not item or action not in ("start", "restart", "stop", "persist-stop", "persist-allow") or action not in item.get("actions", []):
-        return False, "不允许的操作：目标必须是自动发现或配置的 user service。"
+        # A suppressed service has no listener and therefore no scan entry, but
+        # releasing it must still work - the record is keyed by target name.
+        if action != "persist-allow" or target not in persist_stop_load():
+            return False, "不允许的操作：目标必须是自动发现或配置的 user service。"
     if action in ("persist-stop", "persist-allow"):
         proc = (item.get("process") or "").lower()
         if not any(p in proc for p in PERSIST_STOPPABLE):
