@@ -239,6 +239,15 @@ def restart() -> dict:
     return start()
 
 
+def stop() -> dict:
+    """Stop every browser component but keep the profile and login data intact."""
+    stop_process("chromium")
+    stop_process("vnc")
+    stop_process("novnc")
+    stop_process("xvfb")
+    return status()
+
+
 if __name__ == "__main__":
     action = sys.argv[1] if len(sys.argv) > 1 else "status"
     if action == "install":
@@ -247,6 +256,8 @@ if __name__ == "__main__":
         print(json.dumps(start(), ensure_ascii=False))
     elif action == "restart":
         print(json.dumps(restart(), ensure_ascii=False))
+    elif action == "stop":
+        print(json.dumps(stop(), ensure_ascii=False))
     elif action == "status":
         print(json.dumps(status(), ensure_ascii=False))
     elif action == "github-url":
@@ -259,4 +270,4 @@ if __name__ == "__main__":
         start()
         print(json.dumps(cookie(), ensure_ascii=False))
     else:
-        raise SystemExit("usage: monkeycode_browser.py [install|start|restart|status|github-url|cookie]")
+        raise SystemExit("usage: monkeycode_browser.py [install|start|stop|restart|status|github-url|cookie]")

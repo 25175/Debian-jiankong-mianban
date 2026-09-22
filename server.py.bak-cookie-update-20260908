@@ -6,14 +6,12 @@ import collections
 import glob
 from concurrent.futures import ThreadPoolExecutor
 import html
-import base64
 import http.client
 import json
 import os
 import re
 import secrets
 import select
-import ssl
 import shutil
 import socket
 import subprocess
@@ -128,41 +126,25 @@ GUARDIAN_ACTIONS: dict[str, dict] = {}
 GUARDIAN_SECRET_FIELDS = ("worker_admin_password",)
 PLUGIN_DIR = BASE / "plugins"
 PLUGIN_STATE_PATH = BASE / "plugins.local.json"
-LOGIN_BROWSER_SCRIPT = BASE / "monkeycode_browser.py"
-LOGIN_BROWSER_PORT = 6080
 BUILTIN_PLUGINS = {
     "cloudflare-guardian": {
         "name": "服务监控 / 保活中心",
         "description": "Cloudflare Worker、MonkeyCode 上游与真实 Task 保活管理",
         "route": "/guardian/",
         "port": PORT,
-    },
-    "monkeycode-login-browser": {
-        "name": "MonkeyCode 登录浏览器",
-        "description": "一键安装 Chromium、中文字体、Xvfb、受控 VNC/noVNC；用于登录后自动同步 Cookie",
-        "route": "/guardian/",
-        "port": PORT,
-        "installable": True,
-    },
+    }
 }
 ISSUE_TITLE_CACHE: dict[str, str] = {}
 TASK_LOCK = threading.Lock()
 RESOURCE_HISTORY = collections.deque(maxlen=1200)
 RESOURCE_LOCK = threading.Lock()
 RESOURCE_LAST: dict = {"at": 0.0, "cpu": None, "net": None}
-PUBLIC_NETWORK_LOCK = threading.Lock()
-PUBLIC_NETWORK: dict = {"at": 0.0, "refreshing": False, "domestic": {}, "international": {}, "error": ""}
 BROWSER_TICKETS: dict[str, float] = {}
 BROWSER_SESSIONS: dict[str, float] = {}
 BROWSER_LOCK = threading.Lock()
 BROWSER_TTL = 300
 SERVICE_TARGETS: dict[str, dict] = {}
 SERVICE_LOCK = threading.Lock()
-# Last cookie value automatically synced to the Worker, so the watcher only
-# pushes when the VM browser session actually changed (new login / refresh).
-AUTO_SYNC_LOCK = threading.Lock()
-AUTO_SYNC_LAST: str = ""
-AUTO_SYNC_INTERVAL = 60
 
 
 def command(*args: str, timeout: int = 8, cwd: str | None = None) -> tuple[int, str]:
@@ -173,91 +155,37 @@ def command(*args: str, timeout: int = 8, cwd: str | None = None) -> tuple[int, 
         return 127, str(exc)
 
 
-class _SNIHTTPSConnection(http.client.HTTPSConnection):
-    """HTTPS connection pinned to a resolved IPv4 address while retaining SNI."""
-
-    def __init__(self, hostname: str, address: str, port: int, timeout: float):
-        super().__init__(hostname, port=port, timeout=timeout, context=ssl.create_default_context())
-        self._address = address
-
-    def connect(self) -> None:
-        raw = socket.create_connection((self._address, self.port), self.timeout)
-        self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
-
-
-def _guardian_json_response(response: http.client.HTTPResponse) -> tuple[int, dict]:
-    raw = response.read().decode("utf-8", "replace")
-    try:
-        body = json.loads(raw) if raw else {}
-    except json.JSONDecodeError:
-        body = {"error": raw[:500] or f"Worker HTTP {response.status}"}
-    return response.status, body
-
-
 def guardian_request(method: str, endpoint: str, payload: dict | None = None) -> tuple[int, dict]:
-    """Call the Worker using direct HTTPS, with Cloudflare IPv4/SNI fallback."""
+    """Use one authenticated Worker session; never login before every status read."""
+    global GUARDIAN_HTTP_OPENER, GUARDIAN_HTTP_BASE
     ready, reason = guardian_ready()
     if not ready:
         return 503, {"ok": False, "error": reason}
     cfg, secrets_data = guardian_config(), load_guardian_secrets()
     configured = str(cfg["worker_admin_url"]).rstrip("/")
     base = (configured if configured.endswith("/cf-admin") else configured + "/cf-admin") + "/"
-    target = urlsplit(urljoin(base, "guardian-api/" + endpoint.lstrip("/")))
-    if target.scheme != "https" or not target.hostname:
-        return 400, {"ok": False, "error": "Worker 管理地址必须为 HTTPS"}
-    payload_bytes = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
-    headers = {"User-Agent": "jiankong/1.0", "Accept": "application/json", "X-Jiankong-Sync-Token": str(secrets_data["worker_admin_password"])}
-    if payload_bytes:
-        headers["Content-Type"] = "application/json"
-    path = (target.path or "/") + ((("?" + target.query) if target.query else ""))
-    failures: list[str] = []
-    # Resolve once, IPv4 only. MonkeyCode egress routes intermittently time out
-    # on Cloudflare anycast; connecting by name lets getaddrinfo hand back a
-    # stalled endpoint, and retrying names re-resolves the same bad address.
+    password = str(secrets_data["worker_admin_password"])
+    # Service-to-service synchronization authenticates once per request using
+    # the Worker admin secret over HTTPS. It avoids a login redirect/cookie
+    # exchange and returns the real Worker state faster.
+    headers = {"User-Agent": "jiankong/1.0", "Accept": "application/json", "X-Jiankong-Sync-Token": password}
     try:
-        addresses = list(dict.fromkeys(info[4][0] for info in socket.getaddrinfo(target.hostname, target.port or 443, socket.AF_INET, socket.SOCK_STREAM)))
-    except OSError as exc:
-        addresses = []
-        failures.append(str(exc))
-    # Try each resolved IPv4 address, keeping the domain as SNI/Host so TLS
-    # still verifies. Sort healthy endpoints first: this VM's egress reaches
-    # 104.21.19.6 in 0.4s but 172.67.184.94 always times out (8s), and DNS
-    # returns the dead endpoint first. Connect-TCP probes are cheap and let a
-    # dead anycast address fail in ~1s instead of burning the full timeout.
-    def reachable(address: str, port: int) -> bool:
-        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        probe.settimeout(1.0)
-        try:
-            probe.connect((address, port))
-            return True
-        except OSError:
-            return False
-        finally:
-            probe.close()
-    port = target.port or 443
-    ordered = sorted(addresses, key=lambda a: reachable(a, port), reverse=True)
-    for address in ordered:
-        connection = None
-        try:
-            connection = _SNIHTTPSConnection(target.hostname, address, port, 8)
-            connection.request(method, path, body=payload_bytes, headers=headers)
-            return _guardian_json_response(connection.getresponse())
-        except (OSError, ValueError, ssl.SSLError, http.client.HTTPException) as exc:
-            failures.append(f"{address}: {exc}")
-        finally:
-            if connection:
-                connection.close()
-    # Fall back to the plain name-based request; this is the clean path when the
-    # resolved IPv4 list above was exhausted by a transient route failure.
-    try:
-        request = Request(target.geturl(), data=payload_bytes, method=method, headers=headers)
+        data = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
+        request = Request(urljoin(base, "guardian-api/" + endpoint.lstrip("/")), data=data, method=method, headers={**headers, **({"Content-Type": "application/json"} if data else {})})
+        # MonkeyCode preview containers may inherit a broken HTTP(S)_PROXY; the
+        # direct Cloudflare route is the intended network path.
         with build_opener(ProxyHandler({})).open(request, timeout=8) as response:
-            return _guardian_json_response(response)
+            raw = response.read().decode("utf-8", "replace")
+            return response.status, json.loads(raw) if raw else {}
     except HTTPError as exc:
-        return _guardian_json_response(exc)
-    except (URLError, OSError, ValueError, ssl.SSLError) as exc:
-        failures.append(str(exc))
-    return 502, {"ok": False, "error": "Worker 通信失败：" + " | ".join(failures[-3:])[:700]}
+        raw = exc.read().decode("utf-8", "replace")
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError:
+            body = {"error": raw[:500] or f"Worker HTTP {exc.code}"}
+        return exc.code, {"ok": False, **body}
+    except (URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return 502, {"ok": False, "error": f"Worker 通信失败：{exc}"}
 
 
 def guardian_status() -> dict:
@@ -273,15 +201,12 @@ def guardian_status() -> dict:
         code, body = guardian_request("GET", "status")
         result.update({"http_status": code, "worker": body, "ok": code == 200 and not body.get("error")})
         worker = result.get("worker") if isinstance(result.get("worker"), dict) else {}
-        if not isinstance(worker, dict):
-            worker = {}
         credential_status = str(worker.get("credentialStatus") or "unknown")
         credential_checked_at = worker.get("credentialCheckedAt")
         credential_expired_at = worker.get("credentialExpiredAt")
-        credential_expiry = worker.get("credentialExpiry")
-        result["credential"] = {"status": credential_status, "checkedAt": credential_checked_at, "expiredAt": credential_expired_at, "expiry": credential_expiry, "message": worker.get("credentialMessage") or "等待真实 Task WebSocket 保活结果"}
+        result["credential"] = {"status": credential_status, "checkedAt": credential_checked_at, "expiredAt": credential_expired_at, "expiry": None, "message": worker.get("credentialMessage") or "等待真实 Task WebSocket 保活结果"}
         if credential_status == "expired_or_invalid":
-            result["message"] = "MonkeyCode 登录凭据（Cookie/CIK）已过期或无效，请重新登录后在本页面快速更新"
+            result["message"] = "MonkeyCode 登录凭据（Cookie/CIK）已过期或无效，请重新登录后更新 Worker Secret MONKEYCODE_COOKIE"
     except Exception as exc:
         result.update({"http_status": 502, "ok": False, "worker": {"ok": False, "error": f"实时 Worker 状态读取失败：{exc}"}})
     return result
@@ -352,115 +277,19 @@ def plugins(host_header: str = "") -> list[dict]:
     states = plugin_states()
     result = []
     for key, plugin in BUILTIN_PLUGINS.items():
-        installed = states.get(key, False)
-        runtime = {}
-        if key == "monkeycode-login-browser":
-            try:
-                runtime = login_browser_run("status")
-            except RuntimeError as exc:
-                runtime = {"installed": False, "error": str(exc)}
-            installed = bool(runtime.get("installed"))
-        url = service_public_url(host_header, int(plugin["port"]), "https://{preview_host}" + plugin["route"]) if installed else None
-        result.append({"key": key, **plugin, "installed": installed, "enabled": states.get(key, False), "url": url, "runtime": runtime})
+        enabled = states.get(key, False)
+        url = service_public_url(host_header, int(plugin["port"]), "https://{preview_host}" + plugin["route"]) if enabled else None
+        result.append({"key": key, **plugin, "installed": enabled, "url": url})
     return result
 
 
 def set_plugin(key: str, installed: bool) -> dict:
     if key not in BUILTIN_PLUGINS:
         raise ValueError("未知插件")
-    if key == "monkeycode-login-browser":
-        if not installed:
-            raise ValueError("登录浏览器含本地持久化登录数据，不能在网页中卸载；可停止服务或删除当前 VM 的项目目录")
-        install_result = login_browser_run("install")
-        runtime = login_browser_run("start")
-        runtime["install"] = install_result
-        state = json_file(PLUGIN_STATE_PATH)
-        state[key] = True
-        atomic_json_write(PLUGIN_STATE_PATH, state, 0o600)
-        return {"key": key, "installed": True, "runtime": runtime}
     state = json_file(PLUGIN_STATE_PATH)
     state[key] = bool(installed)
     atomic_json_write(PLUGIN_STATE_PATH, state, 0o600)
     return {"key": key, "installed": state[key]}
-
-
-def login_browser_run(action: str, payload: dict | None = None) -> dict:
-    if not LOGIN_BROWSER_SCRIPT.exists():
-        raise RuntimeError("登录浏览器组件未安装")
-    # github-url performs a real VM CDP navigation and waits for the Network
-    # authorize request; 15 seconds is shorter than a cold Chromium/SPA load.
-    # Capturing a real GitHub OAuth navigation may need a full SPA load.
-    # cookie now also revives Chromium when it died (EMFILE/OOM), which needs a
-    # cold browser start plus DevTools endpoint readiness.
-    timeout = 60 if action in ("github-url", "cookie") else 15
-    args = ["python3", str(LOGIN_BROWSER_SCRIPT), action]
-    if payload is not None:
-        args.append(json.dumps(payload, ensure_ascii=False))
-    code, output = command(*args, timeout=timeout)
-    if code != 0:
-        raise RuntimeError(output or "登录浏览器启动失败")
-    try:
-        return json.loads(output)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"登录浏览器返回格式无效：{output[:200]}") from exc
-
-
-def login_browser_url(host_header: str) -> str | None:
-    return service_public_url(host_header, LOGIN_BROWSER_PORT, "https://{preview_host}/vnc.html?autoconnect=true&resize=remote")
-
-
-def sync_login_browser_cookie() -> dict:
-    """Push the VM browser cookie to the Worker, exactly like the manual button.
-
-    Called by both the /api/login-browser/sync endpoint and the background
-    watcher, so manual and automatic sync share one identical code path.
-    """
-    browser_cookie = login_browser_run("cookie")
-    cookie_value = browser_cookie["cookie"]
-    code, response = guardian_request("POST", "credential", {"cookie": cookie_value, "expiresAt": browser_cookie.get("expiresAt")})
-    return {"code": code, "ok": code == 200 and bool(response.get("ok")), "cookie": cookie_value, "expiresAt": browser_cookie.get("expiresAt"), "worker": response}
-
-
-def auto_sync_watcher() -> None:
-    """Detect a changed VM browser cookie and sync it to the Worker automatically.
-
-    Without this, a VNC re-login only updates Chromium locally; the Worker keeps
-    the stale cookie until someone opens the panel and clicks "同步 Worker".
-    The Worker endpoint is idempotent for an unchanged cookie, but we still skip
-    the request when the value is identical to the last push.
-    """
-    while True:
-        time.sleep(AUTO_SYNC_INTERVAL)
-        global AUTO_SYNC_LAST
-        if not guardian_ready()[0] or not LOGIN_BROWSER_SCRIPT.exists():
-            continue
-        try:
-            current = login_browser_run("cookie")["cookie"]
-        except (RuntimeError, KeyError):
-            # Chromium down (EMFILE/OOM) or not logged in yet; start() inside
-            # the cookie action will revive it, so just wait for the next tick.
-            continue
-        with AUTO_SYNC_LOCK:
-            if current == AUTO_SYNC_LAST:
-                continue
-        try:
-            result = sync_login_browser_cookie()
-        except RuntimeError:
-            continue
-        # Update the baseline whenever the Worker actually accepted the push
-        # (HTTP 200). Re-loginning to a bad session should not retry every
-        # tick: the cookie only becomes valid after a real VNC login changes
-        # it again, and the Worker endpoint is idempotent for a repeat value.
-        code = result.get("code")
-        accepted = code == 200 and not (result.get("worker") or {}).get("error")
-        if accepted:
-            with AUTO_SYNC_LOCK:
-                AUTO_SYNC_LAST = current
-        if result.get("ok"):
-            guardian_event("自动同步", True, "VM 浏览器 Cookie 变化已自动同步到 Worker")
-        else:
-            error = (result.get("worker") or {}).get("error") or "Worker 未确认"
-            guardian_event("自动同步", False, str(error)[:200])
 
 
 def _prune_browser_tokens() -> None:
@@ -538,68 +367,6 @@ def _net_bytes(iface: str) -> tuple[int, int]:
     return (int(values[0]), int(values[8])) if len(values) > 8 else (0, 0)
 
 
-def _read_json(opener, url: str, headers: dict) -> dict:
-    with opener.open(Request(url, headers=headers), timeout=8) as response:
-        value = json.loads(response.read().decode("utf-8", "replace"))
-    if not isinstance(value, dict):
-        raise ValueError("IP 服务返回格式无效")
-    return value
-
-
-def _refresh_public_network() -> None:
-    # Each probe degrades independently: a blocked or rate-limited service must
-    # not discard the other result. IP services are notoriously flaky from a
-    # multi-route VM (ipify returns a different egress per request, ipinfo 429s,
-    # ipapi.co 403s), so prefer the endpoints that proved stable here.
-    opener = build_opener(ProxyHandler({}))
-    headers = {"Accept": "text/plain,application/json,*/*", "User-Agent": "Mozilla/5.0"}
-    domestic: dict = {}
-    international: dict = {}
-    errors: list[str] = []
-
-    # International egress: Cloudflare's trace endpoint is stable, not
-    # rate-limited, and reports both the client IP and the colo location, so it
-    # replaces the ipify + ip-api two-step whose answers jumped between egresses.
-    try:
-        with opener.open(Request("https://www.cloudflare.com/cdn-cgi/trace", headers=headers), timeout=8) as response:
-            trace = dict((line.split("=", 1) for line in response.read().decode("utf-8", "replace").split() if "=" in line))
-        ip = str(trace.get("ip") or "").strip()
-        loc = str(trace.get("loc") or "").strip()
-        colo = str(trace.get("colo") or "").strip()
-        if ip:
-            location = f"{loc} · 节点 {colo}" if loc and colo else (loc or "位置未知")
-            international = {"ip": ip, "location": location, "isp": colo or ""}
-    except (OSError, ValueError) as exc:
-        errors.append(f"国际出口：{exc}")
-
-    # Domestic egress: myip.ipip.net is the only in-China service that stayed
-    # reachable and returned a stable address plus location in one request.
-    try:
-        with opener.open(Request("https://myip.ipip.net", headers=headers), timeout=8) as response:
-            domestic_raw = response.read().decode("utf-8", "replace").strip()
-        matched = re.search(r"当前\s*IP[：:]?\s*([0-9a-fA-F:.]+)\s*来自于[：:]?\s*(.+)", domestic_raw)
-        if matched:
-            domestic = {"ip": matched.group(1), "location": matched.group(2).strip(), "isp": ""}
-        else:
-            errors.append(f"国内出口：返回格式无法解析（{domestic_raw[:80]}）")
-    except (OSError, ValueError) as exc:
-        errors.append(f"国内出口：{exc}")
-
-    with PUBLIC_NETWORK_LOCK:
-        PUBLIC_NETWORK.update({"at": time.time(), "refreshing": False, "domestic": domestic, "international": international, "error": "；".join(errors)[:160] or ""})
-
-
-def public_network() -> dict:
-    now = time.time()
-    with PUBLIC_NETWORK_LOCK:
-        snapshot = dict(PUBLIC_NETWORK)
-        if now - float(snapshot["at"] or 0) > 600 and not snapshot["refreshing"]:
-            PUBLIC_NETWORK["refreshing"] = True
-            threading.Thread(target=_refresh_public_network, name="public-network", daemon=True).start()
-            snapshot["refreshing"] = True
-    return {key: snapshot.get(key) for key in ("domestic", "international", "error", "refreshing")}
-
-
 def resources() -> dict:
     now = time.time()
     iface = _active_iface()
@@ -646,7 +413,7 @@ def resources() -> dict:
     def state(pct: float) -> str:
         return "danger" if pct >= 90 else ("warning" if pct >= 75 else "ok")
 
-    return {"sample": sample, "memory": {"used": mem_used, "total": mem_total, "state": state(sample["memory"]), "accounting": memory_accounting}, "disk": {"used": disk.used, "total": disk.total, "state": state(sample["disk"])}, "cpu": {"state": state(sample["cpu"])}, "network": {"iface": iface, "down": down, "up": up, "state": "ok" if iface else "danger", "public": public_network()}, "recent": recent, "hour": hour}
+    return {"sample": sample, "memory": {"used": mem_used, "total": mem_total, "state": state(sample["memory"]), "accounting": memory_accounting}, "disk": {"used": disk.used, "total": disk.total, "state": state(sample["disk"])}, "cpu": {"state": state(sample["cpu"])}, "network": {"iface": iface, "down": down, "up": up, "state": "ok" if iface else "danger"}, "recent": recent, "hour": hour}
 
 
 def systemd_units() -> dict[str, dict]:
@@ -756,22 +523,8 @@ def service_status(host_header: str = "") -> list[dict]:
             item_id += "-2"
         used_ids.add(item_id)
         title = rule.get("name") or item["unit_name"] or item["process"] or f"端口 {item['port']}"
-        actions = rule.get("actions")
-        if actions is None:
-            # With a systemd unit the platform can start/restart; without one
-            # (firecracker-init only launches, never respawns) we can only stop.
-            if item["unit"]:
-                actions = ["start", "restart"]
-            else:
-                cmdline = ""
-                try:
-                    cmdline = Path(f"/proc/{item['pid']}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip()
-                except OSError:
-                    pass
-                self_kill = item.get("port") == PORT and ("server.py" in cmdline or item.get("process", "").lower().startswith("python"))
-                agent_link = "/app/agent/bin/agent" in cmdline
-                actions = [] if (self_kill or agent_link) else ["stop"]
-        item.update({**{"key": item_id, "title": title, "detail": rule.get("description") or f"{item['address']} · {item['process'] or '监听进程'}"}, "actions": actions, "url": rule.get("url"), "link_label": rule.get("link_label"), "ok": True, **process_memory(item["pid"])})
+        actions = rule.get("actions", ["restart"] if item["unit"] else [])
+        item.update({"key": item_id, "title": title, "detail": rule.get("description") or f"{item['address']} · {item['process'] or '监听进程'}", "actions": actions, "url": rule.get("url"), "link_label": rule.get("link_label"), "ok": True, **process_memory(item["pid"])})
         item["url"] = service_public_url(host_header, item["port"], item["url"])
         if item["url"]:
             item["url"] = item["url"].format(unit=item["unit"], process=item["process"])
@@ -902,51 +655,16 @@ def status(host_header: str = "") -> dict:
     return {"dashboard_name": CONFIG.get("name", "Debian 服务监控面板"), "generated_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"), "host": socket.gethostname(), "monitor_port": PORT, "all_ok": all(x["ok"] for x in items), "items": items, "agents": agents, "plugins": plugins(host_header), "uptime_seconds": int(time.time() - STARTED), "resources": resources()}
 
 
-SELF_PID = os.getpid()
-
-
 def allowed_action(target: str, action: str) -> tuple[bool, str]:
     with SERVICE_LOCK:
         item = dict(SERVICE_TARGETS.get(target, {}))
-    if not item or action not in ("start", "restart", "stop") or action not in item.get("actions", []):
+    if not item or action not in ("start", "restart") or action not in item.get("actions", []):
         return False, "不允许的操作：目标必须是自动发现或配置的 user service。"
     unit = item.get("unit")
-    if unit:
-        code, output = command("systemctl", "--user", action, unit, timeout=20)
-        return code == 0, output or f"{unit} {action} 请求已执行"
-    if action != "stop":
-        return False, "该端口没有关联的 systemd user service，无法启动 / 重启。"
-    # firecracker-init does not supervise these processes: once killed they stay
-    # down until something starts them again. Only offer "stop" for them.
-    pid = int(item.get("pid") or 0)
-    if not pid:
-        return False, "没有找到该服务的进程。"
-    if pid == SELF_PID:
-        return False, "不能停止监控面板自身，否则会断开当前管理连接。"
-    cmdline = ""
-    try:
-        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip()
-    except OSError:
-        pass
-    if "/app/agent/bin/agent" in cmdline or "sharedterminal" in cmdline:
-        return False, "不能停止远程协助 / Agent 进程，否则会断开当前管理连接。"
-    try:
-        os.kill(pid, 15)
-    except ProcessLookupError:
-        return True, "进程已不在运行。"
-    except PermissionError:
-        return False, "没有权限停止该进程。"
-    for _ in range(30):
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return True, f"已停止 PID {pid}（{item.get('process') or item.get('title')}）。停止后不会自动恢复，需在 VM 内重新启动。"
-        time.sleep(0.2)
-    try:
-        os.kill(pid, 9)
-    except OSError:
-        pass
-    return True, f"已强制停止 PID {pid}（{item.get('process') or item.get('title')}）。停止后不会自动恢复，需在 VM 内重新启动。"
+    if not unit:
+        return False, "该端口没有关联的 systemd user service。"
+    code, output = command("systemctl", "--user", action, unit, timeout=20)
+    return code == 0, output or f"{unit} {action} 请求已执行"
 
 
 def logs(target: str) -> tuple[bool, str]:
@@ -1137,15 +855,6 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if asset_path == "/api/login-browser/status":
-            if not self.authorized():
-                self.send_json(401, {"error": "需要控制令牌"})
-                return
-            try:
-                self.send_json(200, {"browser": login_browser_run("status"), "url": login_browser_url(self.headers.get("Host", ""))})
-            except RuntimeError as exc:
-                self.send_json(503, {"error": str(exc)})
-            return
         if asset_path == "/api/guardian/status":
             # Status is intentionally read-only and public so the 8888 service
             # card opens a useful dashboard immediately. All setup, Worker KV
@@ -1190,61 +899,6 @@ class Handler(BaseHTTPRequestHandler):
             ok = code == 200 and not response.get("error")
             guardian_event("应用配置", ok, response.get("error") or "Worker 配置已写入 KV 并立即生效")
             self.send_json(code if code < 500 else 502, {"ok": ok, "worker": response})
-            return
-        if self.path == "/api/login-browser/reset":
-            if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
-                return
-            try:
-                browser = login_browser_run("restart")
-                self.send_json(200, {"ok": True, "browser": browser, "url": login_browser_url(self.headers.get("Host", ""))})
-            except RuntimeError as exc:
-                self.send_json(503, {"error": str(exc)})
-            return
-        if self.path == "/api/login-browser/start":
-            if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
-                return
-            try:
-                browser = login_browser_run("start")
-                self.send_json(200, {"browser": browser, "url": login_browser_url(self.headers.get("Host", ""))})
-            except RuntimeError as exc:
-                self.send_json(503, {"error": str(exc)})
-            return
-        if self.path == "/api/login-browser/stop":
-            if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
-                return
-            try:
-                browser = login_browser_run("stop")
-                self.send_json(200, {"ok": True, "browser": browser, "url": login_browser_url(self.headers.get("Host", ""))})
-            except RuntimeError as exc:
-                self.send_json(503, {"error": str(exc)})
-            return
-        if self.path == "/api/login-browser/sync":
-            if not (self.authorized() or self.browser_authorized()):
-                self.send_json(401, {"error": "需要控制令牌或手机控制页会话"})
-                return
-            try:
-                result = sync_login_browser_cookie()
-                # Keep the watcher in sync so it does not re-push this cookie.
-                if result.get("ok"):
-                    with AUTO_SYNC_LOCK:
-                        AUTO_SYNC_LAST = result["cookie"]
-                self.send_json(result["code"], {"ok": result["ok"], "browser": {"expiresAt": result.get("expiresAt")}, "worker": result.get("worker")})
-            except RuntimeError as exc:
-                self.send_json(503, {"error": str(exc)})
-            return
-        if self.path == "/api/guardian/credential":
-            if not self.authorized():
-                self.send_json(401, {"error": "控制令牌无效"})
-                return
-            try:
-                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
-                code, response = guardian_request("POST", "credential", {"cookie": body.get("cookie", ""), "expiresAt": body.get("expiresAt")})
-                self.send_json(code, response)
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                self.send_json(400, {"error": str(exc)})
             return
         if self.path == "/api/guardian/keepalive":
             if not self.authorized():
@@ -1299,5 +953,4 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    threading.Thread(target=auto_sync_watcher, name="auto-sync", daemon=True).start()
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

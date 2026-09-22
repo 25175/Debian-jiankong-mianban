@@ -95,16 +95,25 @@ summary{cursor:pointer;font-size:12.5px}
 @media(max-width:1100px){.grid{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:900px){.two{grid-template-columns:1fr}}
 @media(max-width:760px){
-  .shell{padding:14px 12px 50px}
-  h1{font-size:21px}
-  .grid{grid-template-columns:1fr 1fr}
+  .shell{padding:12px 10px 44px}
+  h1{font-size:20px}
+  .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+  .card{padding:11px 12px;gap:7px}
+  .card .name{font-size:13px}
   .config{grid-template-columns:1fr}
   .config .wide{grid-column:auto}
   .readback{grid-template-columns:1fr 1fr}
   .readback .wide{grid-column:span 2}
-  .token-wrap input{width:130px}
+  .toolbar{flex-wrap:wrap;gap:6px}
+  .toolbar .btn{padding:6px 10px;font-size:12px}
+  .metric{padding:11px 12px}
+  .token-wrap input{width:120px}
 }
-@media(max-width:480px){.grid{grid-template-columns:1fr}}
+@media(max-width:480px){
+  .grid{grid-template-columns:1fr 1fr}
+  .metric{padding:9px 10px}
+  .metric strong{font-size:14px}
+}
 </style>
 <body>
 <main class="shell">
