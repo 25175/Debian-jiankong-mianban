@@ -995,8 +995,12 @@ def allowed_action(target: str, action: str) -> tuple[bool, str]:
         if action != "persist-allow" or target not in persist_stop_load():
             return False, "不允许的操作：目标必须是自动发现或配置的 user service。"
     if action in ("persist-stop", "persist-allow"):
-        proc = (item.get("process") or "").lower()
-        if not any(p in proc for p in PERSIST_STOPPABLE):
+        # When the service is currently suppressed there is no scan entry, so
+        # trust the on-disk record instead of the (empty) scan item.
+        proc = (item.get("process") or ("opencode" if action == "persist-allow" and target in persist_stop_load() else "")).lower()
+        if action == "persist-allow" and target in persist_stop_load():
+            pass
+        elif not any(p in proc for p in PERSIST_STOPPABLE):
             return False, "该服务由平台按需管理，不支持持久化停止；只能立即停止。"
         with PERSIST_STOP_LOCK:
             if action == "persist-stop":
