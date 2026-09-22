@@ -273,7 +273,12 @@ function renderAgent(){const agents=data.agents||[];document.querySelector('#age
 async function load(manual=false){if(manual)say('正在刷新状态…');try{data=await api('/api/status');const bad=data.items.filter(x=>x.category==='service'&&!x.ok),h=document.querySelector('#health');document.querySelector('#dashboard-name').textContent=data.dashboard_name||'服务监控面板';document.title=data.dashboard_name||'服务监控面板';document.querySelector('#meta').textContent=`主机 ${data.host} · 最后刷新 ${data.generated_at} · 监控端口 ${data.monitor_port}`;h.className='health '+(bad.length?'bad':'');h.innerHTML=`<small>系统概览</small><strong>${bad.length?`${bad.length} 项需要关注`:'自动发现服务正常'}</strong>`;const core=data.items.filter(x=>x.category==='service'),components=data.items.filter(x=>x.category==='component');document.querySelector('#core').innerHTML=core.length?core.map(x=>card(x,true)).join(''):'<article class="card lead neutral"><div class="card-top"><div class="name">未发现监听服务</div><span class="tag">等待中</span></div><div class="desc">当前服务器没有可识别的 TCP 监听端口。</div></article>';renderPlugins();renderAgent();document.querySelector('#components').innerHTML=components.map(x=>card(x)).join('')}catch(e){const hasContent=typeof data!=='undefined'&&data;document.querySelector('#meta').textContent=hasContent?'暂时无法更新，正在自动重试…':'正在连接监控服务…';if(!hasContent)say('状态读取失败，正在自动重试')}}
 modal.addEventListener('click',e=>{if(e.target===modal)closeModal()});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&modal.classList.contains('show'))closeModal()});
-load();loadResources();setInterval(load,5000);setInterval(loadResources,3000);
+load();loadResources();
+/* Both polls hit the VM on a fixed timer; skip them while the tab is
+   backgrounded so a parked dashboard stops forking ss / systemctl. */
+setInterval(()=>{document.hidden||load()},5000);
+setInterval(()=>{document.hidden||loadResources()},3000);
+addEventListener('visibilitychange',()=>{if(!document.hidden){load();loadResources()}});
 addEventListener('resize',()=>resourceData&&renderResources(resourceData));
 </script>
 </body>

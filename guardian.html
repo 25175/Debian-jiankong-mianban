@@ -193,7 +193,7 @@ summary{cursor:pointer;font-size:12.5px}
 
   <div class="section-head"><h2>凭据过期后的快速更新</h2><span>Cookie / CIK 失效时按此流程恢复</span></div>
   <section class="card" style="margin-bottom:18px">
-    <p class="label" style="margin:0 0 6px;color:var(--text-2);font-size:12.5px">在 PC 或手机网页端重新登录 MonkeyCode，确认目标 Task 可打开后，复制完整 Cookie 到上方“更新 MonkeyCode Cookie”区域并点击“更新并验证”。</p>
+    <p class="label" style="margin:0 0 6px;color:var(--text-2);font-size:12.5px">Cookie 过期后，点击上方“重开 VM 登录浏览器”，在打开的浏览器中完成 MonkeyCode 登录与回调，然后点击“登录完成后同步 Worker”即可。</p>
     <p class="label" style="margin:0;color:var(--muted);font-size:11.5px">仅当真实 Task WebSocket 返回 401/403 或登录凭据错误时标记“过期/无效”；上游 521/502/503 只标记为上游不可达，不误报 Cookie 过期。</p>
   </section>
 
@@ -250,7 +250,11 @@ async function resetAndOpenLoginBrowser(){try{say('正在重启 VM Chromium 并�
 async function syncLoginBrowser(){try{const r=await api('/api/login-browser/sync',{method:'POST'});const ok=r.ok===true;say(ok?'VM 浏览器 Cookie 已同步并通过真实 Task WebSocket 验证':`同步失败：${r.worker?.error||r.error||'请先在手机控制页完成 VM 浏览器登录'}`,!ok);await load()}catch(e){say('同步失败：'+e.message,true)}}
 async function probe(){try{const r=await api('/api/guardian/probe',{method:'POST'});await watchAction(r.action,'上游探测')}catch(e){say('探测提交失败：'+e.message,true)}}
 async function keepaliveNow(){try{const r=await api('/api/guardian/keepalive',{method:'POST'});await watchAction(r.action,'立即保活')}catch(e){say('保活提交失败：'+e.message,true)}}
-load();setInterval(()=>load(),12000);
+load();
+/* Pause the 12s Worker poll when the tab is hidden: each hit is a ~1.9s
+   round-trip to Cloudflare and a backgrounded dashboard has no viewer. */
+setInterval(()=>{document.hidden||load()},12000);
+addEventListener('visibilitychange',()=>{document.hidden||load()});
 </script>
 </body>
 </html>

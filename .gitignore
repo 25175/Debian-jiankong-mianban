@@ -5,3 +5,4 @@ plugins.local.json
 *.tmp
 __pycache__/
 *.pyc
+*.bak-*

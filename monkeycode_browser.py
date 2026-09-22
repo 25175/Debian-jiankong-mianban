@@ -189,10 +189,15 @@ def cdp(page: dict, method: str, params: dict | None = None) -> dict:
     ws = websocket.create_connection(page["webSocketDebuggerUrl"], suppress_origin=True, timeout=8)
     try:
         ws.send(json.dumps({"id": 1, "method": method, "params": params or {}}))
+        deadline = time.time() + 8
         while True:
             result = json.loads(ws.recv())
             if result.get("id") == 1:
                 return result
+            # A page event arrives before our answer; keep reading but do not
+            # wait past the socket timeout for an id that may never come.
+            if time.time() > deadline:
+                raise RuntimeError(f"DevTools {method} 未在 8 秒内返回结果")
     finally:
         ws.close()
 
@@ -268,8 +273,6 @@ if __name__ == "__main__":
         print(json.dumps(stop(), ensure_ascii=False))
     elif action == "status":
         print(json.dumps(status(), ensure_ascii=False))
-    elif action == "github-url":
-        print(json.dumps(github_login_url(), ensure_ascii=False))
     elif action == "cookie":
         # A cookie only changes through a real VNC re-login, which needs a live
         # browser, so this action never starts one. Starting Chromium here would
@@ -279,4 +282,4 @@ if __name__ == "__main__":
             raise RuntimeError("登录浏览器未运行；请在面板点击重开 VM 登录浏览器后再登录")
         print(json.dumps(cookie(), ensure_ascii=False))
     else:
-        raise SystemExit("usage: monkeycode_browser.py [install|start|stop|restart|status|github-url|cookie]")
+        raise SystemExit("usage: monkeycode_browser.py [install|start|stop|restart|status|cookie]")

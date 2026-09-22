@@ -117,8 +117,6 @@ CONFIG = load_config()
 HOST = str(CONFIG["listen"].get("host") or "0.0.0.0")
 PORT = int(CONFIG["listen"].get("port") or 8888)
 TOKEN = TOKEN_PATH.read_text(encoding="utf-8").strip() if TOKEN_PATH.exists() else ""
-TASK_CACHE: dict = {"at": 0.0, "data": {"available": False, "running": 0, "recent": [], "error": "正在读取任务"}}
-TASK_CACHE_TTL = 15
 GUARDIAN_SECRET_PATH = BASE / "cloudflare-guardian-secret.json"
 GUARDIAN_LOCK = threading.Lock()
 GUARDIAN_HISTORY: collections.deque = collections.deque(maxlen=80)
@@ -131,6 +129,11 @@ PLUGIN_DIR = BASE / "plugins"
 PLUGIN_STATE_PATH = BASE / "plugins.local.json"
 LOGIN_BROWSER_SCRIPT = BASE / "monkeycode_browser.py"
 LOGIN_BROWSER_PORT = 6080
+# login_browser_run("status") forks python on every /api/status (every 5s from
+# the UI); the pid-file check it does cannot change faster than that.
+BROWSER_STATUS_TTL = 3.0
+_BROWSER_STATUS: dict = {"at": 0.0, "data": None}
+BROWSER_STATUS_LOCK = threading.Lock()
 BUILTIN_PLUGINS = {
     "cloudflare-guardian": {
         "name": "服务监控 / 保活中心",
@@ -147,7 +150,6 @@ BUILTIN_PLUGINS = {
     },
 }
 ISSUE_TITLE_CACHE: dict[str, str] = {}
-TASK_LOCK = threading.Lock()
 RESOURCE_HISTORY = collections.deque(maxlen=1200)
 RESOURCE_LOCK = threading.Lock()
 RESOURCE_LAST: dict = {"at": 0.0, "cpu": None, "net": None}
@@ -159,6 +161,11 @@ BROWSER_LOCK = threading.Lock()
 BROWSER_TTL = 300
 SERVICE_TARGETS: dict[str, dict] = {}
 SERVICE_LOCK = threading.Lock()
+# ss -ltnpH is forked on every /api/status and again by installed_agents;
+# cache the result briefly so a burst of status calls costs one fork, not five.
+PORT_SCAN_TTL = 2.0
+_PORT_SCAN: dict = {"at": 0.0, "data": []}
+PORT_SCAN_LOCK = threading.Lock()
 PERSIST_STOP_PATH = BASE / "data" / "persist-stop.json"
 PERSIST_STOP_LOCK = threading.Lock()
 PERSIST_STOP: set[str] = set()
@@ -356,6 +363,22 @@ def plugin_states() -> dict:
     return {key: bool(saved.get(key, False)) for key in BUILTIN_PLUGINS}
 
 
+def login_browser_status_cached() -> dict:
+    """The status action only reads pid files; cache it so the 5s UI poll
+    does not fork a python interpreter on every request."""
+    now = time.time()
+    with BROWSER_STATUS_LOCK:
+        if _BROWSER_STATUS["data"] is not None and now - _BROWSER_STATUS["at"] < BROWSER_STATUS_TTL:
+            return _BROWSER_STATUS["data"]
+    try:
+        data = login_browser_run("status")
+    except RuntimeError as exc:
+        data = {"installed": False, "error": str(exc)}
+    with BROWSER_STATUS_LOCK:
+        _BROWSER_STATUS.update({"at": now, "data": data})
+    return data
+
+
 def plugins(host_header: str = "") -> list[dict]:
     states = plugin_states()
     result = []
@@ -363,10 +386,7 @@ def plugins(host_header: str = "") -> list[dict]:
         installed = states.get(key, False)
         runtime = {}
         if key == "monkeycode-login-browser":
-            try:
-                runtime = login_browser_run("status")
-            except RuntimeError as exc:
-                runtime = {"installed": False, "error": str(exc)}
+            runtime = login_browser_status_cached()
             installed = bool(runtime.get("installed"))
         url = service_public_url(host_header, int(plugin["port"]), "https://{preview_host}" + plugin["route"]) if installed else None
         result.append({"key": key, **plugin, "installed": installed, "enabled": states.get(key, False), "url": url, "runtime": runtime})
@@ -395,12 +415,9 @@ def set_plugin(key: str, installed: bool) -> dict:
 def login_browser_run(action: str, payload: dict | None = None) -> dict:
     if not LOGIN_BROWSER_SCRIPT.exists():
         raise RuntimeError("登录浏览器组件未安装")
-    # github-url performs a real VM CDP navigation and waits for the Network
-    # authorize request; 15 seconds is shorter than a cold Chromium/SPA load.
-    # Capturing a real GitHub OAuth navigation may need a full SPA load.
-    # cookie now also revives Chromium when it died (EMFILE/OOM), which needs a
-    # cold browser start plus DevTools endpoint readiness.
-    timeout = 60 if action in ("github-url", "cookie") else 15
+    # cookie reads DevTools over a live browser and can need a cold start;
+    # every other action is a pid-file check or a process spawn.
+    timeout = 60 if action == "cookie" else 15
     args = ["python3", str(LOGIN_BROWSER_SCRIPT), action]
     if payload is not None:
         args.append(json.dumps(payload, ensure_ascii=False))
@@ -555,14 +572,6 @@ def _net_bytes(iface: str) -> tuple[int, int]:
     return (int(values[0]), int(values[8])) if len(values) > 8 else (0, 0)
 
 
-def _read_json(opener, url: str, headers: dict) -> dict:
-    with opener.open(Request(url, headers=headers), timeout=8) as response:
-        value = json.loads(response.read().decode("utf-8", "replace"))
-    if not isinstance(value, dict):
-        raise ValueError("IP 服务返回格式无效")
-    return value
-
-
 def _refresh_public_network() -> None:
     # Each probe degrades independently: a blocked or rate-limited service must
     # not discard the other result. IP services are notoriously flaky from a
@@ -683,6 +692,10 @@ def systemd_units() -> dict[str, dict]:
 
 
 def listening_ports() -> list[dict]:
+    now = time.time()
+    with PORT_SCAN_LOCK:
+        if now - _PORT_SCAN["at"] < PORT_SCAN_TTL and _PORT_SCAN["data"]:
+            return _PORT_SCAN["data"]
     code, output = command("ss", "-ltnpH")
     ports = []
     if code == 0:
@@ -694,11 +707,14 @@ def listening_ports() -> list[dict]:
                 port = int(fields[3].rsplit(":", 1)[-1].rstrip("]"))
             except ValueError:
                 continue
-            match = re.search(r'users:\(\("([^"]+)",pid=(\d+)', " ".join(fields[4:]))
-            pid = int(match.group(2)) if match else 0
-            process_name = match.group(1) if match else ""
+            match = re.search(r'users:\(("([^"]+)",pid=(\d+)', " ".join(fields[4:]))
+            pid = int(match.group(3)) if match else 0
+            process_name = match.group(2) if match else ""
             ports.append({"port": port, "pid": pid, "process": process_name, "address": fields[3]})
-    return sorted({(x["port"], x["pid"], x["process"]): x for x in ports}.values(), key=lambda x: x["port"])
+    data = sorted({(x["port"], x["pid"], x["process"]): x for x in ports}.values(), key=lambda x: x["port"])
+    with PORT_SCAN_LOCK:
+        _PORT_SCAN.update({"at": now, "data": data})
+    return data
 
 
 def process_memory(pid: int) -> dict:
@@ -827,10 +843,6 @@ def service_status(host_header: str = "") -> list[dict]:
         SERVICE_TARGETS.clear()
         SERVICE_TARGETS.update({x["key"]: x for x in items})
     return items
-
-
-def process_running(name: str) -> bool:
-    return any(x["process"] == name for x in listening_ports())
 
 
 def codex_cli() -> dict:
