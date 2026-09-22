@@ -132,22 +132,15 @@ def main() -> None:
 
 
 def install() -> None:
-    """Install a crontab entry that keeps this watchdog alive."""
-    py = sys.executable
-    entry = f"@reboot {py} {BASE / 'watchdog.py'} >> {BASE / 'watchdog.log'} 2>&1\n"
-    current = ""
-    try:
-        current = subprocess.run(
-            ["crontab", "-l"], capture_output=True, text=True, timeout=5
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        pass
-    if "watchdog.py" in current:
-        print("crontab 已包含 watchdog 条目")
-        return
-    merged = current + ("\n" if current and not current.endswith("\n") else "") + entry
-    subprocess.run(["crontab", "-"], input=merged, text=True, timeout=5, check=True)
-    print("已安装 crontab：", entry.strip())
+    """Keep this watchdog alive without cron/systemd.
+
+    Neither crontab nor a running systemd bus exists on this VM, so the watchdog
+    cannot be scheduled externally. Instead jiankong itself runs a lightweight
+    thread that respawns watchdog.py when it disappears (see server.py), and the
+    watchdog does the same for server.py - a two-parent arrangement where the
+    only way both die at once is an outright VM restart.
+    """
+    print("此环境无 crontab/systemd；watchdog 由 jiankong 内部线程互拉保活", flush=True)
 
 
 if __name__ == "__main__":

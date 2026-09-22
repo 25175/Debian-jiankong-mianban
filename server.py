@@ -17,6 +17,7 @@ import ssl
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 from http.cookiejar import CookieJar
@@ -1303,8 +1304,33 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200 if ok else 400, {"ok": ok, "message": output})
 
 
+def watchdog_supervisor() -> None:
+    """Keep watchdog.py alive - it keeps us alive in return.
+
+    Neither cron nor systemd is usable on this VM, so the monitor and its
+    watchdog supervise each other: this thread respawns watchdog.py whenever it
+    disappears, and watchdog.py restarts server.py when it disappears.
+    """
+    while True:
+        try:
+            already = False
+            try:
+                if (BASE / "data" / "watchdog.lock").exists():
+                    pid = int((BASE / "data" / "watchdog.lock").read_text().strip())
+                    os.kill(pid, 0)
+                    already = True
+            except (OSError, ValueError):
+                already = False
+            if not already:
+                command(sys.executable, str(BASE / "watchdog.py"), timeout=1)
+        except Exception:  # noqa: BLE001 - supervisor must never die
+            pass
+        time.sleep(15)
+
+
 if __name__ == "__main__":
     threading.Thread(target=auto_sync_watcher, name="auto-sync", daemon=True).start()
+    threading.Thread(target=watchdog_supervisor, name="watchdog-keeper", daemon=True).start()
     # Watchdog loop: if the HTTP server dies (crash, OOM kill, port race), the
     # whole process exits and this loop restarts it. firecracker-init does not
     # supervise jiankong, so it must supervise itself.
