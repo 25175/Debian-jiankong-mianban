@@ -1452,7 +1452,14 @@ def watchdog_supervisor() -> None:
             except (OSError, ValueError):
                 already = False
             if not already:
-                command(sys.executable, str(BASE / "watchdog.py"), timeout=1)
+                subprocess.Popen(
+                    [sys.executable, str(BASE / "watchdog.py")],
+                    cwd=str(BASE),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
         except Exception:  # noqa: BLE001 - supervisor must never die
             pass
         time.sleep(15)
