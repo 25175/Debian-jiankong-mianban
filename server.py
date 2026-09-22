@@ -1275,15 +1275,23 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(503, {"error": str(exc)})
             return
         if asset_path == "/api/guardian/status":
-            # Status is intentionally read-only and public so the 8888 service
-            # card opens a useful dashboard immediately. All setup, Worker KV
-            # writes, probes and manual keepalives remain token-protected POSTs.
+            # Read-only Worker state, but it exposes the upstream origin, taskId
+            # and credential health, so it needs the same token as everything else.
+            if not self.authorized():
+                self.send_json(401, {"error": "需要控制令牌"})
+                return
             self.send_json(200, guardian_status())
             return
         if asset_path == "/api/status":
+            if not self.authorized():
+                self.send_json(401, {"error": "需要控制令牌"})
+                return
             self.send_json(200, status(self.headers.get("Host", "")))
             return
         if asset_path == "/api/resources":
+            if not self.authorized():
+                self.send_json(401, {"error": "需要控制令牌"})
+                return
             self.send_json(200, resources())
             return
         if asset_path.startswith("/api/logs"):
