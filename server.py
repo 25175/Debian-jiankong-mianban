@@ -768,10 +768,15 @@ def service_status(host_header: str = "") -> list[dict]:
                     cmdline = Path(f"/proc/{item['pid']}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip()
                 except OSError:
                     pass
-                self_kill = item.get("port") == PORT and ("server.py" in cmdline or item.get("process", "").lower().startswith("python"))
-                agent_link = "/app/agent/bin/agent" in cmdline
+                proc = (item.get("process") or "").lower()
+                # jiankong itself and the remote-assist agent must never be stopped
+                # from the web UI - it would kill the management connection.
+                self_kill = item.get("port") == PORT and ("server.py" in cmdline or proc.startswith("python"))
+                agent_link = "/app/agent/bin/agent" in cmdline or proc == "agent"
                 actions = [] if (self_kill or agent_link) else ["stop"]
-        item.update({**{"key": item_id, "title": title, "detail": rule.get("description") or f"{item['address']} · {item['process'] or '监听进程'}"}, "actions": actions, "url": rule.get("url"), "link_label": rule.get("link_label"), "ok": True, **process_memory(item["pid"])})
+        managed = not item["unit"] and actions and not any(
+            (item.get("process") or "").lower().startswith(p) for p in ("x11vnc", "websockify", "chromium"))
+        item.update({**{"key": item_id, "title": title, "detail": rule.get("description") or f"{item['address']} · {item['process'] or '监听进程'}"}, "actions": actions, "managed": managed, "url": rule.get("url"), "link_label": rule.get("link_label"), "ok": True, **process_memory(item["pid"])})
         item["url"] = service_public_url(host_header, item["port"], item["url"])
         if item["url"]:
             item["url"] = item["url"].format(unit=item["unit"], process=item["process"])
@@ -1300,4 +1305,16 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     threading.Thread(target=auto_sync_watcher, name="auto-sync", daemon=True).start()
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    # Watchdog loop: if the HTTP server dies (crash, OOM kill, port race), the
+    # whole process exits and this loop restarts it. firecracker-init does not
+    # supervise jiankong, so it must supervise itself.
+    while True:
+        try:
+            ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+        except OSError as exc:
+            # Port still held by the previous, not-yet-dead instance: wait for it.
+            print(f"[jiankong] 监听 {PORT} 失败：{exc}，5 秒后重试", flush=True)
+            time.sleep(5)
+        except Exception as exc:  # noqa: BLE001 - watchdog must never die
+            print(f"[jiankong] 服务异常退出：{exc}，3 秒后自动拉起", flush=True)
+            time.sleep(3)
