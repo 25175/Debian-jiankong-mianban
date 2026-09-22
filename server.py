@@ -445,8 +445,9 @@ def auto_sync_watcher() -> None:
         try:
             current = login_browser_run("cookie")["cookie"]
         except (RuntimeError, KeyError):
-            # Chromium down (EMFILE/OOM) or not logged in yet; start() inside
-            # the cookie action will revive it, so just wait for the next tick.
+            # Chromium is intentionally stopped when idle (a re-login is the
+            # only reason to keep it running). Do not start it here - the
+            # panel "重开" button is the only entry point. Just wait.
             continue
         with AUTO_SYNC_LOCK:
             if current == AUTO_SYNC_LAST:
@@ -464,6 +465,14 @@ def auto_sync_watcher() -> None:
         if accepted:
             with AUTO_SYNC_LOCK:
                 AUTO_SYNC_LAST = current
+            # The cookie was just pushed after a re-login; the browser has no
+            # further job. Stop it now so it stops holding ~300MB until the
+            # next re-login. The profile keeps the login, so "重开" restores
+            # the session instantly.
+            try:
+                login_browser_run("stop")
+            except RuntimeError:
+                pass
         if result.get("ok"):
             guardian_event("自动同步", True, "VM 浏览器 Cookie 变化已自动同步到 Worker")
         else:

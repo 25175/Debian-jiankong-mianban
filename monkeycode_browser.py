@@ -271,11 +271,12 @@ if __name__ == "__main__":
     elif action == "github-url":
         print(json.dumps(github_login_url(), ensure_ascii=False))
     elif action == "cookie":
-        # Chromium can be dead (EMFILE crash, OOM, manual kill) while its pid
-        # file lingers. A cookie read then fails with a confusing "DevTools
-        # 暂时无响应" instead of restarting the browser. Bring it back first;
-        # start() is a no-op for everything already alive.
-        start()
+        # A cookie only changes through a real VNC re-login, which needs a live
+        # browser, so this action never starts one. Starting Chromium here would
+        # keep it idling in the background forever (it holds ~300MB); the panel
+        # start button is the only entry point that brings the browser up.
+        if not alive(pid_path("chromium")):
+            raise RuntimeError("登录浏览器未运行；请在面板点击重开 VM 登录浏览器后再登录")
         print(json.dumps(cookie(), ensure_ascii=False))
     else:
         raise SystemExit("usage: monkeycode_browser.py [install|start|stop|restart|status|github-url|cookie]")
