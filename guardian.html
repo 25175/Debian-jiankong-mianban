@@ -211,46 +211,21 @@ summary{cursor:pointer;font-size:12.5px}
     <article class="card metric"><small>协议保活</small><strong id="keepalive">—</strong><span id="keepaliveSub" class="label">—</span></article>
   </div>
 
-  <div class="section-head"><h2>协议保活（Cloudflare Worker）</h2><span>Worker 定时代理保活与凭据管理，与下方终端长连接相互独立</span></div>
-
-  <div class="section-head"><h2>VM 登录浏览器</h2><span>Cookie 过期后在此重新登录并同步</span></div>
-  <section class="two">
-    <article class="card">
-      <div class="credential-row">
-        <span class="label" id="credentialExpiryState">Worker Cookie 有效期读取中</span>
-        <button class="btn primary" onclick="resetAndOpenLoginBrowser()">重开 VM 登录浏览器</button>
-        <button class="btn" onclick="syncLoginBrowser()">登录完成后同步 Worker</button>
-      </div>
-      <p class="label" style="margin:10px 0 0;color:var(--muted);font-size:11.5px;line-height:1.55">
-        此按钮会重启受控 Chromium，再在<b>新标签页</b>打开同一个 VM 浏览器的 VNC/noVNC（不会离开本页）；
-        请在该浏览器中完成 MonkeyCode → 百智云 → GitHub 的完整登录和回调，随后点击“同步 Worker”。
-        Cookie 变化后 60 秒内会自动同步，无需手动操作。</p>
-    </article>
-    <article class="card">
-      <h3 style="margin:0 0 8px;font-size:14px">快速操作</h3>
-      <div class="toolbar" style="margin:0">
-        <button class="btn" onclick="load(true)">↻ 刷新全部状态</button>
-        <button class="btn" onclick="probe()">测试上游连接</button>
-        <button class="btn warn" onclick="keepaliveNow()">立即保活一次</button>
-      </div>
-      <p class="label" style="margin:10px 0 0;color:var(--muted);font-size:11.5px">状态每 12 秒自动刷新；手动操作需要登录密码。</p>
-    </article>
-  </section>
-
-  <div class="section-head"><h2>一键接入 Worker</h2><span>填一个 work 域名，自动配好并写入 KV</span></div>
+  <div class="section-head"><h2>保活设置 / 详情</h2><span>Worker 定时代理保活与凭据管理，与终端长连接相互独立</span></div>
+  <div class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:14px">
+    <article class="card metric"><small>Worker / KV</small><strong id="worker">—</strong><span id="workerSub" class="label">—</span></article>
+    <article class="card metric"><small>MonkeyCode 上游</small><strong id="upstream">—</strong><span id="upstreamSub" class="label">—</span></article>
+    <article class="card metric"><small>协议保活</small><strong id="keepalive">—</strong><span id="keepaliveSub" class="label">—</span></article>
+  </div>
   <section class="card" style="margin-bottom:18px">
     <div class="config" style="grid-template-columns:1.5fr 1fr auto;align-items:end">
       <label>Work 域名<input id="quickDomain" placeholder="例如 ce.example.com" autocomplete="off"></label>
       <label>Worker 管理密码<input id="quickPassword" type="password" placeholder="首次接入时填写" autocomplete="off"></label>
       <button class="btn primary" id="quickBtn" onclick="quickSetup()">一键接入</button>
     </div>
-    <p class="label" style="margin:10px 0 0;color:var(--muted);font-size:11.5px;line-height:1.55">自动生成本机 Worker 管理地址、上游 8787 地址与 Task ID，保存后直接写入 Worker KV 立即生效；旧配置会被覆盖。密码只存本机 600 权限文件。</p>
-  </section>
-
-  <div class="section-head"><h2>一键接入 / 实时设置</h2><span>保存到本机，写入 Worker KV 后立即生效</span></div>
-  <section class="two">
-    <article class="card">
-      <div class="config">
+    <p class="label" style="margin:10px 0 0;color:var(--muted);font-size:11.5px;line-height:1.55">填一个 work 域名即可自动配好并写入 KV，立即生效。旧配置会被覆盖；密码只存本机 600 权限文件。</p>
+    <details style="margin-top:14px"><summary>高级设置（手动填写管理地址 / Task ID / 保活参数）</summary>
+      <div class="config" style="margin-top:10px">
         <label class="wide">Worker 管理地址（必须是 /cf-admin/）<input id="worker_admin_url" placeholder="https://example.com/cf-admin/"></label>
         <label class="wide">Worker 管理密码（只保存至本机 600 权限文件）<input id="worker_admin_password" type="password" placeholder="首次接入或修改密码时填写"></label>
         <label class="wide">MonkeyCode 8787 上游地址<input id="upstreamOrigin" placeholder="https://8787-xxx.monkeycode-ai.online"></label>
@@ -267,10 +242,52 @@ summary{cursor:pointer;font-size:12.5px}
         <button class="btn primary" onclick="applyConfig()">2. 写入 Worker，立即生效</button>
       </div>
       <p class="label" style="margin:0;color:var(--muted);font-size:11.5px">保存仅写入当前 MonkeyCode 的 jiankong 本机配置；“写入 Worker”才会更新 Cloudflare KV。密码永不回显。</p>
+    </details>
+  </section>
+
+  <div class="section-head"><h2>Worker 运行状态</h2><span>实时读回与运行事件</span></div>
+  <section class="two">
+    <article class="card">
+      <div class="readback">
+        <div><small>Worker 时间</small><strong id="rb-time">—</strong></div>
+        <div><small>凭据更新时间</small><strong id="rb-credential-at">—</strong></div>
+        <div><small>凭据状态</small><strong id="rb-credential-status">—</strong></div>
+        <div><small>保活结果</small><strong id="rb-status">—</strong></div>
+        <div><small>上次保活</small><strong id="rb-last">—</strong></div>
+        <div><small>下次计划</small><strong id="rb-next">—</strong></div>
+        <div class="wide"><small>最新错误 / 说明</small><strong id="rb-message">—</strong></div>
+      </div>
+      <details><summary>查看原始 Worker 返回（排障用）</summary><pre id="details" class="json">等待读取…</pre></details>
     </article>
     <article class="card">
       <h3 style="margin:0 0 10px;font-size:14px">运行事件</h3>
       <ul id="timeline" class="timeline"><li class="empty">等待读取…</li></ul>
+      <div class="toolbar" style="margin:12px 0 0">
+        <button class="btn" onclick="load(true)">↻ 刷新全部状态</button>
+        <button class="btn" onclick="probe()">测试上游连接</button>
+        <button class="btn warn" onclick="keepaliveNow()">立即保活一次</button>
+      </div>
+    </article>
+  </section>
+
+  <div class="section-head"><h2>VM 登录浏览器</h2><span>Cookie 过期后在此重新登录并同步</span></div>
+  <section class="two">
+    <article class="card">
+      <div class="credential-row">
+        <span class="label" id="credentialExpiryState">Worker Cookie 有效期读取中</span>
+        <button class="btn primary" onclick="resetAndOpenLoginBrowser()">重开 VM 登录浏览器</button>
+        <button class="btn" onclick="syncLoginBrowser()">登录完成后同步 Worker</button>
+      </div>
+      <p class="label" style="margin:10px 0 0;color:var(--muted);font-size:11.5px;line-height:1.55">
+        此按钮会重启受控 Chromium，再在<b>新标签页</b>打开同一个 VM 浏览器的 VNC/noVNC（不会离开本页）；
+        请在该浏览器中完成 MonkeyCode → 百智云 → GitHub 的完整登录和回调，随后点击“同步 Worker”。
+        Cookie 变化后 60 秒内会自动同步，无需手动操作。</p>
+    </article>
+    <article class="card">
+      <div class="credential-row">
+        <span class="label"><b style="color:var(--text)">共享浏览器运行环境</b><br><span style="font-size:11px;color:var(--muted)">在服务监控面板的「组件」分区安装 / 停止</span></span>
+        <button class="btn" onclick="location.href='/'">去面板管理</button>
+      </div>
     </article>
   </section>
 
@@ -303,19 +320,6 @@ summary{cursor:pointer;font-size:12.5px}
 
   <div id="termList" class="two" style="align-items:start"></div>
 
-  <div class="section-head"><h2>Worker 实时读回</h2><span>排障用原始数据</span></div>
-  <section class="card">
-    <div id="readback" class="readback">
-      <div><small>Worker 时间</small><strong id="rb-time">—</strong></div>
-      <div><small>凭据更新时间</small><strong id="rb-credential-at">—</strong></div>
-      <div><small>凭据状态</small><strong id="rb-credential-status">—</strong></div>
-      <div><small>保活结果</small><strong id="rb-status">—</strong></div>
-      <div><small>上次保活</small><strong id="rb-last">—</strong></div>
-      <div><small>下次计划</small><strong id="rb-next">—</strong></div>
-      <div class="wide"><small>最新错误 / 说明</small><strong id="rb-message">—</strong></div>
-    </div>
-    <details><summary>查看原始 Worker 返回（排障用）</summary><pre id="details" class="json">等待读取…</pre></details>
-  </section>
 </main>
 
 <script>
@@ -374,16 +378,17 @@ function termCard(l){
   const st=l.state||{};const status=TERM_STATUS[st.status]||st.status||'未连接';
   const mode=st.mode==='owner'?'同账号 Cookie 通道':(st.mode==='share'?'跨账号分享密码':'—');
   const tid=(l.entry&&l.entry.terminal_id)||'未配置';
+  const title=(l.entry&&l.entry.title)||'';
   const label=esc(l.label||tid);
   const cls=st.status==='connected'?'good':(st.status==='reconnecting'?'warn':(st.status==='error'?'bad':''));
   const err=st.last_error?(' · '+esc(st.last_error)):(l.stale?' · 心跳超时':'');
-  return `<article class="card">
+  return `<article class="card ${cls?'':' '}" style="${cls?'border-left:3px solid var(--'+cls+')':''}">
     <div class="credential-row" style="align-items:flex-start">
-      <span class="label" style="min-width:0"><b style="color:var(--text)">${label}</b><br><span style="font-size:11px;color:var(--muted)">${esc(tid)}</span></span>
+      <span class="label" style="min-width:0"><b style="color:var(--text)">${label}</b>${title?`<span style="font-size:11px;color:var(--muted)"> · ${esc(title)}</span>`:''}<br><span style="font-size:11px;color:var(--muted);font-family:ui-monospace,monospace">${esc(tid)}</span></span>
       <button class="btn" onclick="terminalToggle('${l.id}',${l.enabled?'false':'true'})">${l.enabled?'断开':'连接'}</button>
       <button class="btn warn" onclick="terminalDelete('${l.id}')">删除</button>
     </div>
-    <div class="readback" style="grid-template-columns:repeat(2,minmax(0,1fr));margin-top:10px">
+    <div class="readback" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-top:10px">
       <div><small>连接状态</small><strong class="${cls}">${status}</strong></div>
       <div><small>连接通道</small><strong>${mode}</strong></div>
       <div><small>已连接时长</small><strong>${fmtDur(l.uptime_seconds)}</strong></div>
@@ -404,11 +409,12 @@ function renderTerminal(t){
   list.innerHTML=t.links.map(termCard).join('');
 }
 async function loadTerminal(){try{renderTerminal(await api('/api/terminal/status'))}catch(e){if(e.name!=='AbortError')console.warn('terminal status failed',e)}}
-function termBody(){return {paste:$('termPaste').value,label:$('termLabel').value,terminal_id:$('termTerminalId').value,password:$('termPassword').value,cookie:$('termCookie').value,envid:$('termEnvid').value,id:$('termEditId').value}}
+function termBody(){return {paste:$('termPaste').value,label:$('termLabel').value,terminal_id:$('termTerminalId').value,password:$('termPassword').value,cookie:$('termCookie').value,envid:$('termEnvid').value,title:window.__termTitle||'',id:$('termEditId').value}}
 function termFillFromDiscover(r){
   if(r.label)$('termLabel').value=r.label;
   if(r.terminal_id)$('termTerminalId').value=r.terminal_id;
   if(r.envid)$('termEnvid').value=r.envid;
+  window.__termTitle=r.title||'';
   if(r.password)$('termPassword').value='';
   $('termFields').style.display='grid';
 }

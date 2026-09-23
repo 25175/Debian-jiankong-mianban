@@ -310,7 +310,7 @@ matchMedia('(prefers-color-scheme:dark)').addEventListener('change',()=>{if((loc
 
 function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML}
 function say(s){notice.textContent=s;clearTimeout(window.nt);window.nt=setTimeout(()=>notice.textContent='',4200)}
-async function api(path,opt={}){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),path.includes('plugins/toggle')&&opt.method==='POST'?900000:8000);try{opt.headers={...(opt.headers||{}),'X-Jiankong-Token':token.value};opt.signal=controller.signal;const r=await fetch(path,opt),d=await r.json();if(!r.ok)throw Error(d.error||'请求失败');return d}finally{clearTimeout(timer)}}
+async function api(path,opt={}){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),path.includes('plugins/toggle')&&opt.method==='POST'?900000:8000);try{opt.headers={...(opt.headers||{}),'X-Jiankong-Token':token.value};opt.signal=controller.signal;const r=await fetch(path,opt),t=await r.text();let d;try{d=JSON.parse(t)}catch(e){throw Error('服务返回了非 JSON 内容（可能是网关超时页）：'+t.slice(0,80))}if(!r.ok)throw Error(d.error||'请求失败');return d}finally{clearTimeout(timer)}}
 function requireToken(){if(token.value.trim())return true;showLogin();return false}
 function openModal(t,x){modalTitle.textContent=t;modalText.textContent=x;logBox.hidden=true;logBox.className='';confirmBtn.hidden=true;confirmBtn.disabled=false;confirmBtn.textContent='确认操作';confirmBtn.onclick=null;closeModalBtn.textContent='关闭';modal.classList.add('show')}
 function closeModal(){modal.classList.remove('show');confirmBtn.onclick=null;confirmBtn.disabled=false}

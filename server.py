@@ -24,7 +24,7 @@ from http.cookiejar import CookieJar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urljoin, urlsplit
 from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
 
@@ -265,6 +265,52 @@ def _normalize_cookie(raw: str) -> str:
     return value
 
 
+def _platform_api(method: str, path: str, cookie: str, payload: dict | None = None) -> tuple[int, str]:
+    """Call the MonkeyCode platform exactly the way direct.py does.
+
+    direct.py sends Origin + Referer with every POST; without them the share
+    endpoint answers 404 and minting a fresh invite password silently fails.
+    """
+    data = json.dumps(payload).encode() if payload is not None else None
+    request = Request(
+        TERMINAL_BASE + path,
+        method=method,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "Cookie": cookie,
+            "Origin": TERMINAL_BASE,
+            "Referer": TERMINAL_BASE + "/",
+            "User-Agent": "Mozilla/5.0",
+        },
+    )
+    try:
+        with build_opener(ProxyHandler({})).open(request, timeout=15) as response:
+            return int(response.status), response.read().decode("utf-8", "replace")
+    except HTTPError as exc:
+        return int(exc.code), exc.read().decode("utf-8", "replace")
+    except OSError as exc:
+        return 0, str(exc)[:200]
+
+
+def _share_mint(cookie: str, envid: str, terminal_id: str) -> str | None:
+    """Mint a fresh invite password; returns None if the account rejected it."""
+    code, body = _platform_api(
+        "POST",
+        f"/api/v1/users/hosts/vms/{quote(envid, safe='')}/terminals/share",
+        cookie,
+        {"terminal_id": terminal_id, "mode": "readwrite"},
+    )
+    if code != 200:
+        return None
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    pw = (payload.get("data") or {}).get("password")
+    return str(pw) if pw else None
+
+
 def _parse_paste(raw: str) -> dict:
     """Split one pasted blob into the fields it actually contains.
 
@@ -281,11 +327,17 @@ def _parse_paste(raw: str) -> dict:
         text = text.replace(sep, "\n")
     lines = [x.strip() for x in text.splitlines() if x.strip()]
     combined = "\n".join(lines)
+    # sharedterminal invitations put the id in the query string, not a join path.
     url_match = re.search(
-        r"(?:https?://[^\s?]*\?)?terminal_id=([0-9a-f-]{36})", combined, re.I)
+        r"(?:https?://[^\s?]*)?/[a-z_]*terminal[a-z_]*(?:[/?]|$|\?)[^ ]*?terminal_id=([0-9a-f-]{36})",
+        combined, re.I)
+    if not url_match:
+        url_match = re.search(r"terminal_id=([0-9a-f-]{36})", combined, re.I)
     if url_match:
         found["terminal_id"] = url_match.group(1)
-    pw_match = re.search(r"password=([0-9a-f]{6,12})", combined, re.I)
+    pw_match = re.search(r"(?:密码|password)\s*[:：]?\s*([0-9a-f]{6,12})", combined, re.I)
+    if not pw_match:
+        pw_match = re.search(r"password=([0-9a-f]{6,12})", combined, re.I)
     if pw_match:
         found["password"] = pw_match.group(1)
     env_match = re.search(r"\b(agent_[0-9a-f-]{36})\b", combined)
@@ -335,6 +387,54 @@ def terminal_list_api(cookie: str, envid: str) -> tuple[int, list]:
     ]
 
 
+def _link_mode(entry: dict) -> str:
+    """Channel decision: owner (cookie) wins, share (password) otherwise."""
+    if str(entry.get("cookie") or "") and str(entry.get("envid") or ""):
+        return "owner"
+    return "share"
+
+
+def _ws_url(entry: dict) -> str:
+    terminal_id = quote(str(entry.get("terminal_id") or ""), safe="")
+    if _link_mode(entry) == "owner":
+        envid = quote(str(entry.get("envid") or ""), safe="")
+        return (
+            TERMINAL_BASE.replace("https", "wss")
+            + f"/api/v1/users/hosts/vms/{envid}/terminals/connect?terminal_id={terminal_id}"
+        )
+    password = quote(str(entry.get("password") or ""), safe="")
+    return (
+        TERMINAL_BASE.replace("https", "wss")
+        + f"/api/v1/users/hosts/vms/terminals/join?terminal_id={terminal_id}&password={password}"
+    )
+
+
+def _terminal_headers(entry: dict) -> dict:
+    """direct.py parity: Origin + UA on every link; Cookie only on owner links."""
+    header = {"Origin": TERMINAL_BASE, "User-Agent": "Mozilla/5.0"}
+    if _link_mode(entry) == "owner":
+        header["Cookie"] = str(entry.get("cookie") or "")
+    return header
+
+
+def _frame_kind(raw) -> str:
+    """Classify one server frame; 'connected' opens the session, 'error' kills it."""
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", "replace")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return ""
+    kind = str(payload.get("type") or "")
+    if kind == "error":
+        data = payload.get("data")
+        raise RuntimeError(str(data)[:200])
+    if kind == "connected":
+        # {"type":"connected","data":"{...user json...}"} -> the handshake reply.
+        return "connected"
+    return "ping" if kind == "ping" else ""
+
+
 class TerminalLink:
     """One independent persistent WebSocket link to one remote terminal.
 
@@ -362,52 +462,12 @@ class TerminalLink:
         with self._lock:
             return dict(self._state)
 
-    def _ws_url(self) -> str:
-        envid = str(self.entry.get("envid") or "")
-        terminal_id = str(self.entry.get("terminal_id") or "")
-        cookie = str(self.entry.get("cookie") or "")
-        password = str(self.entry.get("password") or "")
-        # Owner channel only when this link really has an account cookie; a
-        # password-only link is always the cross-account share channel.
-        if cookie and envid:
-            return (
-                TERMINAL_BASE.replace("https", "wss")
-                + f"/api/v1/users/hosts/vms/{envid}/terminals/connect?terminal_id={terminal_id}"
-            )
-        return (
-            TERMINAL_BASE.replace("https", "wss")
-            + f"/api/v1/users/hosts/vms/terminals/join?terminal_id={terminal_id}&password={password}"
-        )
-
-    def _connect(self) -> None:
-        cookie = str(self.entry.get("cookie") or "")
-        header = {"User-Agent": "jiankong/1.0"}
-        if cookie:
-            header["Cookie"] = cookie
-        self._ws = websocket.create_connection(self._ws_url(), timeout=20, header=header)
-
     def _set(self, **patch) -> None:
         with self._lock:
             self._state.update(patch)
 
-    def _frame(self, raw: bytes | str) -> str:
-        if isinstance(raw, (bytes, bytearray)):
-            raw = raw.decode("utf-8", "replace")
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            return ""
-        kind = str(payload.get("type") or "")
-        if kind == "ping":
-            return "ping"
-        if kind in ("error", "data"):
-            data = payload.get("data") or ""
-            if isinstance(data, str) and data.startswith("base64:"):
-                data = base64.b64decode(data[7:]).decode("utf-8", "replace")
-            if kind == "error":
-                raise RuntimeError(str(data)[:200])
-            return str(data)
-        return ""
+    def _connect(self) -> None:
+        self._ws = websocket.create_connection(_ws_url(self.entry), timeout=20, header=_terminal_headers(self.entry))
 
     def start(self) -> bool:
         """Open the link; the keepalive thread is started by the caller."""
@@ -443,18 +503,25 @@ class TerminalLink:
             try:
                 ws.send(json.dumps({"type": "ping", "data": ""}))
                 raw = ws.recv()
-                if self._frame(raw):
+                kind = _frame_kind(raw)
+                if kind:
                     self._set(last_pong=time.time())
                 backoff = 5
             except Exception as exc:  # noqa: BLE001 - any frame error means the link died
                 if self._stop.is_set():
                     break
                 # Forced off (server restart, idle reaping, route change): this
-                # link's own cookie/password is still valid, so re-establish it
-                # instead of waiting for a human.
+                # link's own cookie/password may still be valid, so re-establish
+                # it instead of waiting for a human. Share passwords rotate, so
+                # a refreshable owner cookie can mint a fresh one transparently.
                 self._set(status="reconnecting", last_error=f"{type(exc).__name__}: {str(exc)[:160]}")
+                self._refresh_share_password()
                 try:
                     self._connect()
+                    # The server answers the handshake with {"type":"connected"}.
+                    raw = self._ws.recv() if self._ws is not None else None
+                    if raw is not None and _frame_kind(raw) != "connected":
+                        raise RuntimeError("未收到平台的连接确认帧")
                     with self._lock:
                         reconnects = int(self._state.get("reconnects") or 0) + 1
                     self._set(status="connected", connected_since=time.time(), last_pong=time.time(), reconnects=reconnects, last_error="")
@@ -464,6 +531,27 @@ class TerminalLink:
                     time.sleep(backoff)
                     backoff = min(backoff * 2, 60)
             time.sleep(10)
+
+    def _refresh_share_password(self) -> None:
+        """Mint a new share password for this link's terminal, share channel only.
+
+        Platform share passwords are one-time/rotating: the value pasted once
+        stops working after a single use, so the link must be able to renew its
+        own instead of dying permanently. Only an owner cookie can mint one.
+        """
+        if _link_mode(self.entry) != "share":
+            return
+        # A share link carries no account cookie, so a refresh is impossible;
+        # the only recovery for a stale password is re-pasting a fresh invite.
+        cookie = str(self.entry.get("cookie") or "")
+        envid = str(self.entry.get("envid") or "")
+        terminal_id = str(self.entry.get("terminal_id") or "")
+        if not (cookie and envid and terminal_id):
+            return
+        pw = _share_mint(cookie, envid, terminal_id)
+        if pw:
+            self.entry["password"] = pw
+            _terminal_put_link(self.entry)
 
 
 def _terminal_get_or_create(link_id: str) -> TerminalLink:
@@ -508,6 +596,7 @@ def terminal_apply(body: dict) -> dict:
     link_id = str(body.get("id") or "").strip()
     parsed = _parse_paste(str(body.get("paste") or ""))
     label = str(body.get("label") or parsed.get("label") or "").strip()[:60]
+    title = str(body.get("title") or "").strip()[:60]
     envid = str(body.get("envid") or parsed.get("envid") or "").strip()
     terminal_id = str(body.get("terminal_id") or parsed.get("terminal_id") or "").strip()
     cookie = _normalize_cookie(str(body.get("cookie") or parsed.get("cookie") or ""))
@@ -517,6 +606,7 @@ def terminal_apply(body: dict) -> dict:
     entry = {
         "id": link_id,
         "label": label,
+        "title": title,
         "envid": envid,
         "terminal_id": terminal_id,
         "cookie": cookie,
@@ -580,6 +670,7 @@ def terminal_status() -> dict:
         links.append({
             "id": link_id,
             "label": str(entry.get("label") or ""),
+            "title": str(entry.get("title") or ""),
             "enabled": bool(entry.get("enabled", True)),
             "entry": terminal_redact(entry),
             "state": state,
@@ -653,6 +744,7 @@ def terminal_discover(body: dict) -> dict:
     terminal_id = str(body.get("terminal_id") or parsed.get("terminal_id") or "").strip()
     password = str(body.get("password") or parsed.get("password") or "").strip()
     label = str(body.get("label") or parsed.get("label") or "").strip()[:60]
+    title = str(body.get("title") or "").strip()[:60]
     # Cross-account paste: enough on its own, no cookie lookup needed.
     if terminal_id and password:
         return {
@@ -690,15 +782,31 @@ def terminal_discover(body: dict) -> dict:
         if index_code != 200:
             return {"ok": False, "error": "Cookie 已过期或无效，请重新填写 MonkeyCode Cookie", "parsed": parsed}
         return {"ok": False, "error": f"账号下没有可识别的在线终端（envid={envid or '未知'}）", "parsed": parsed}
-    # Prefer a terminal that already has live connections: it is the active shell.
+    # Prefer the terminal the paste named: a same-account paste can point at a
+    # specific session, and choosing the busiest one silently ignores it.
+    if terminal_id:
+        match = next((x for x in items if str(x.get("id")) == terminal_id), None)
+        if match:
+            return {
+                "ok": True,
+                "label": label or match["title"],
+                "title": match["title"],
+                "envid": envid,
+                "terminal_id": match["id"],
+                "connected_count": match["connected_count"],
+                "mode": "owner",
+                "terminals": items,
+                "note": f"已识别 {len(items)} 个在线终端，使用指定的「{match['title']}」",
+            }
+    # Otherwise prefer a terminal that already has live connections: active shell.
     items.sort(key=lambda x: int(x.get("connected_count") or 0), reverse=True)
     chosen = items[0]
     return {
         "ok": True,
         "label": label or chosen["title"],
+        "title": chosen["title"],
         "envid": envid,
         "terminal_id": chosen["id"],
-        "title": chosen["title"],
         "connected_count": chosen["connected_count"],
         "mode": "owner",
         "terminals": items,
@@ -1008,8 +1116,14 @@ def set_plugin(key: str, installed: bool) -> dict:
     if key == "monkeycode-login-browser":
         if not installed:
             raise ValueError("登录浏览器含本地持久化登录数据，不能在网页中卸载；可停止服务或删除当前 VM 的项目目录")
+        # Install first: on a cold VM apt-get takes minutes, and install alone
+        # is what the "一键安装" button promises. Start is best-effort after it.
         install_result = login_browser_run("install")
-        runtime = login_browser_run("start")
+        try:
+            runtime = login_browser_run("start")
+        except Exception as exc:  # noqa: BLE001 - installed but not started yet
+            runtime = login_browser_run("status")
+            runtime["start_error"] = str(exc)[:200]
         runtime["install"] = install_result
         state = json_file(PLUGIN_STATE_PATH)
         state[key] = True
@@ -1025,8 +1139,9 @@ def login_browser_run(action: str, payload: dict | None = None) -> dict:
     if not LOGIN_BROWSER_SCRIPT.exists():
         raise RuntimeError("登录浏览器组件未安装")
     # cookie reads DevTools over a live browser and can need a cold start;
-    # every other action is a pid-file check or a process spawn.
-    timeout = 60 if action == "cookie" else 15
+    # install runs apt-get and can take several minutes on a cold VM.
+    timeouts = {"cookie": 60, "install": 900, "start": 120, "restart": 180}
+    timeout = timeouts.get(action, 20)
     args = ["python3", str(LOGIN_BROWSER_SCRIPT), action]
     if payload is not None:
         args.append(json.dumps(payload, ensure_ascii=False))
