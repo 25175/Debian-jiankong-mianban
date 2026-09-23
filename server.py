@@ -461,13 +461,75 @@ def terminal_status() -> dict:
     }
 
 
+def terminal_resolve_envid(cookie: str) -> str:
+    """Find the envid whose terminals this cookie can list.
+
+    The terminal API path needs an envid, but the user only ever holds the
+    cookie. /api/v1/users/hosts is the account-level index and names every VM
+    this cookie may touch, so it is the source of truth for one-click setup.
+    """
+    request = Request(
+        f"{TERMINAL_BASE}/api/v1/users/hosts",
+        headers={"Cookie": cookie, "User-Agent": "jiankong/1.0"},
+    )
+    try:
+        with build_opener(ProxyHandler({})).open(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8", "replace"))
+    except (OSError, ValueError, json.JSONDecodeError, HTTPError):
+        return ""
+    data = payload.get("data") if isinstance(payload, dict) else payload
+    # The index nests VMs under "vms"; some accounts list them flat too.
+    if isinstance(data, dict):
+        items = data.get("vms") or data.get("hosts") or []
+    else:
+        items = data if isinstance(data, list) else []
+    if not isinstance(items, list):
+        items = []
+    hostname = ""
+    try:
+        hostname = socket.gethostname()
+    except OSError:
+        pass
+    # Prefer this machine's own VM (the MonkeyCode self-connection): the envid
+    # carries the task uuid, which is also this VM's hostname.
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for field in ("envid", "id"):
+            value = str(item.get(field) or "")
+            if value and value.startswith("agent_") and hostname and hostname in value:
+                return value
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for field in ("envid", "id"):
+            value = str(item.get(field) or "")
+            if value.startswith("agent_"):
+                return value
+    return ""
+
+
 def terminal_discover(cookie: str, envid: str) -> dict:
     """One-click recognition: list the account's live terminals and pick one."""
+    if not envid:
+        envid = terminal_resolve_envid(cookie)
     code, items = terminal_list_api(cookie, envid)
-    if code != 200:
-        return {"ok": False, "error": "无法用该 Cookie 读取终端列表（Cookie 可能已过期）"}
-    if not items:
-        return {"ok": False, "error": "该账号下没有发现在线终端"}
+    if code != 200 or not items:
+        # The account index still answers with a valid cookie, so a failure here
+        # means the cookie is bad rather than the envid being wrong.
+        index_code = 0
+        try:
+            index_request = Request(
+                f"{TERMINAL_BASE}/api/v1/users/hosts",
+                headers={"Cookie": cookie, "User-Agent": "jiankong/1.0"},
+            )
+            with build_opener(ProxyHandler({})).open(index_request, timeout=10) as response:
+                index_code = response.status
+        except (OSError, ValueError, json.JSONDecodeError, HTTPError):
+            index_code = 0
+        if index_code != 200:
+            return {"ok": False, "error": "Cookie 已过期或无效，请重新填写 MonkeyCode Cookie"}
+        return {"ok": False, "error": f"账号下没有可识别的在线终端（envid={envid or '未知'}）"}
     # Prefer a terminal that already has live connections: it is the active shell.
     items.sort(key=lambda x: int(x.get("connected_count") or 0), reverse=True)
     chosen = items[0]
