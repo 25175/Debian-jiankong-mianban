@@ -385,17 +385,21 @@ def quick_worker_setup(worker_domain: str, admin_password: str, host_header: str
     domain = re.sub(r"^https?://", "", domain).rstrip("/")
     if not re.fullmatch(r"[a-z0-9._-]+\.[a-z]{2,}", domain):
         raise ValueError("请输入有效的 work 域名，例如 ce.example.com")
-    # Discover the task id. The preview host of this monitor is
-    # <port>-<task-uuid>.monkeycode-ai.online, so the host minus the port prefix
-    # is the task id itself (verified on both deployed environments). 8787 is
-    # only queried as a fallback for hosts that do not follow that pattern.
+    # Discover the task id. The VM hostname is the task uuid itself
+    # (verified on both deployed environments); the preview host is only a
+    # 16-hex truncation, so it cannot carry the full id. Fall back to the
+    # preview host and then to the 8787 API for hosts that follow neither.
     preview_host = public_host(host_header or "")
     upstream = ""
     task_id = ""
-    match = re.match(r"^\d+-(?P<task>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.monkeycode-ai\.online$", preview_host)
+    try:
+        vm_host = socket.gethostname()
+    except Exception:
+        vm_host = ""
+    match = re.fullmatch(r"(?P<task>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", (vm_host or "").strip())
     if match:
         task_id = match.group("task")
-        upstream = f"https://8787-{match.group('task')[:16]}.monkeycode-ai.online"
+        upstream = f"https://8787-{task_id[:16]}.monkeycode-ai.online"
     else:
         match = re.match(r"^\d+-(?P<hex>[0-9a-f]{16})\.monkeycode-ai\.online$", preview_host)
         if match:
