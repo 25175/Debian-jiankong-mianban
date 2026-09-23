@@ -115,6 +115,57 @@ summary{cursor:pointer;font-size:12.5px}
   .metric{padding:9px 10px}
   .metric strong{font-size:14px}
 }
+
+/* Responsive control-panel refinement. */
+.shell{width:min(100%,1440px);max-width:1440px}
+.grid{grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.card,.two>*{min-width:0}
+.card .label,.config label,.readback strong,.json{overflow-wrap:anywhere;min-width:0}
+.readback{grid-template-columns:repeat(4,minmax(0,1fr))}
+.credential-row .label{min-width:min(200px,100%)}
+.config input{min-width:0}
+.btn,.icon-btn{min-height:40px}
+.topbar .notice{flex-basis:100%;min-height:0}
+@media(max-width:1100px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:900px){.two{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:760px){
+ .shell{padding:12px 12px calc(28px + env(safe-area-inset-bottom))}
+ .hero{margin-bottom:12px}
+ .topbar{gap:6px;padding:8px}
+ .btn,.icon-btn{min-height:44px}
+ .topbar>.spacer{display:none}
+ .topbar>.btn,.topbar>.icon-btn{flex:1 1 auto;justify-content:center}
+ .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+ .card{padding:10px;min-width:0}
+ .card strong{font-size:clamp(14px,4vw,18px);overflow-wrap:anywhere}
+ .section-head{gap:6px;flex-wrap:wrap}
+ .section-head span{flex-basis:100%}
+ .two{gap:10px}
+ .credential-row{align-items:stretch}
+ .credential-row .label{flex:1 1 100%;min-width:0}
+ .credential-row .btn,.toolbar .btn{flex:1 1 180px;justify-content:center;min-height:44px}
+ .config{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+ .config .wide{grid-column:1/-1}
+ .config[style*="1.5fr 1fr auto"]{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+ .config[style*="1.5fr 1fr auto"] button{grid-column:1/-1;width:100%;min-height:44px}
+ .readback{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+ .readback .wide{grid-column:1/-1}
+ .readback>div{padding:9px}
+ .timeline li{overflow-wrap:anywhere}
+}
+@media(max-width:380px){
+ .shell{padding-left:8px;padding-right:8px}
+ .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+ .metric{padding:9px 8px}
+ .metric strong{font-size:13px;overflow-wrap:anywhere}
+ .metric small,.metric .label{font-size:10.5px}
+ .topbar>.btn,.topbar>.icon-btn{flex-basis:calc(50% - 6px);min-height:44px}
+ .config{grid-template-columns:minmax(0,1fr)}
+ .config .wide,.config[style*="1.5fr 1fr auto"] button{grid-column:auto}
+ .readback{grid-template-columns:minmax(0,1fr)}
+ .readback .wide{grid-column:auto}
+ .section-head h2{font-size:15px}
+}
 /* ---------- login page ---------- */
 .login-page[hidden]{display:none!important}
 .login-page{position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:20px}
