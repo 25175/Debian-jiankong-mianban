@@ -478,34 +478,32 @@ def terminal_resolve_envid(cookie: str) -> str:
     except (OSError, ValueError, json.JSONDecodeError, HTTPError):
         return ""
     data = payload.get("data") if isinstance(payload, dict) else payload
-    # The index nests VMs under "vms"; some accounts list them flat too.
-    if isinstance(data, dict):
-        items = data.get("vms") or data.get("hosts") or []
-    else:
-        items = data if isinstance(data, list) else []
-    if not isinstance(items, list):
-        items = []
+    # The account index is hosts[].virtualmachines[]; the VM "id" is the envid
+    # and "hostname" carries the task uuid, which is also this VM's hostname.
+    hosts = data.get("hosts") if isinstance(data, dict) else []
+    if not isinstance(hosts, list):
+        hosts = []
+    items: list = []
+    for host in hosts:
+        if isinstance(host, dict):
+            vms = host.get("virtualmachines") or []
+            if isinstance(vms, list):
+                items.extend(vms)
     hostname = ""
     try:
         hostname = socket.gethostname()
     except OSError:
         pass
-    # Prefer this machine's own VM (the MonkeyCode self-connection): the envid
-    # carries the task uuid, which is also this VM's hostname.
+    # Prefer this machine's own VM: that is the MonkeyCode self-connection.
     for item in items:
         if not isinstance(item, dict):
             continue
-        for field in ("envid", "id"):
-            value = str(item.get(field) or "")
-            if value and value.startswith("agent_") and hostname and hostname in value:
-                return value
+        vm_host = str(item.get("hostname") or "")
+        if vm_host and hostname and vm_host == hostname:
+            return str(item.get("id") or "")
     for item in items:
-        if not isinstance(item, dict):
-            continue
-        for field in ("envid", "id"):
-            value = str(item.get(field) or "")
-            if value.startswith("agent_"):
-                return value
+        if isinstance(item, dict) and str(item.get("id") or "").startswith("agent_"):
+            return str(item["id"])
     return ""
 
 
