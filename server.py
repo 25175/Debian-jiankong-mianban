@@ -123,16 +123,15 @@ TOKEN = ""
 
 
 def control_password() -> str:
-    """Login password, defaulting to "1" when control-token is absent/empty."""
-    global TOKEN
-    if not TOKEN:
-        try:
-            TOKEN = TOKEN_PATH.read_text(encoding="utf-8").strip()
-        except OSError:
-            TOKEN = ""
-        if not TOKEN:
-            TOKEN = DEFAULT_PASSWORD
-    return TOKEN
+    """Login password, defaulting to "1" when control-token is absent/empty.
+
+    Read on every request: writing control-token (e.g. install.sh --regenerate)
+    takes effect immediately without a server restart."""
+    try:
+        value = TOKEN_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        value = ""
+    return value or DEFAULT_PASSWORD
 GUARDIAN_SECRET_PATH = BASE / "cloudflare-guardian-secret.json"
 GUARDIAN_LOCK = threading.Lock()
 GUARDIAN_HISTORY: collections.deque = collections.deque(maxlen=80)
