@@ -165,6 +165,320 @@ BUILTIN_PLUGINS = {
     },
 }
 ISSUE_TITLE_CACHE: dict[str, str] = {}
+TERMINAL_BASE = "https://monkeycode-ai.com"
+TERMINAL_CONFIG_PATH = BASE / "terminals.local.json"
+TERMINAL_LOCK = threading.Lock()
+TERMINAL_SECRET_FIELDS = ("cookie", "password")
+# websocket-client is present on this VM, but the panel must still boot on a
+# machine without it - every terminal path degrades to a clear message then.
+try:
+    import websocket  # type: ignore[import-not-found]
+    TERMINAL_WS_AVAILABLE = True
+except ImportError:  # pragma: no cover - depends on the host
+    websocket = None  # type: ignore[assignment]
+    TERMINAL_WS_AVAILABLE = False
+# The remote terminal link is a long-lived WebSocket held by this server, not by
+# a local agent process. It survives panel restarts because watchdog.py respawns
+# server.py, and the link state below is rebuilt from the on-disk config.
+_TERMINAL: dict = {"manager": None, "at": 0.0}
+
+
+def _load_terminal_config() -> dict:
+    try:
+        value = json.loads(TERMINAL_CONFIG_PATH.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_terminal_config(value: dict) -> None:
+    atomic_json_write(TERMINAL_CONFIG_PATH, value, 0o600)
+
+
+def terminal_redact(entry: dict) -> dict:
+    """Never echo secrets to the browser; only the presence is shown."""
+    redacted = dict(entry)
+    for field in TERMINAL_SECRET_FIELDS:
+        if redacted.get(field):
+            redacted[field] = "[REDACTED]"
+    return redacted
+
+
+def terminal_list_api(cookie: str, envid: str) -> tuple[int, list]:
+    """List live terminals from the platform with the account's session cookie."""
+    if not cookie or not envid:
+        return 0, []
+    request = Request(
+        f"{TERMINAL_BASE}/api/v1/users/hosts/vms/{envid}/terminals",
+        headers={"Cookie": cookie, "User-Agent": "jiankong/1.0"},
+    )
+    try:
+        with build_opener(ProxyHandler({})).open(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8", "replace"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return 0, []
+    data = payload.get("data") if isinstance(payload, dict) else None
+    items = data if isinstance(data, list) else []
+    return 200, [
+        {
+            "id": str(x.get("id") or ""),
+            "title": str(x.get("title") or ""),
+            "connected_count": int(x.get("connected_count") or 0),
+        }
+        for x in items
+        if isinstance(x, dict) and x.get("id")
+    ]
+
+
+class TerminalManager:
+    """Holds one persistent remote-terminal WebSocket from this server.
+
+    The owner channel authenticates with the account session cookie and never
+    needs a rotating share password, so it is the path that keeps the link
+    alive for days. The share channel (terminal_id + password) covers a
+    terminal owned by another account.
+    """
+
+    def __init__(self) -> None:
+        self._ws = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._state = {
+            "status": "disconnected",
+            "mode": None,
+            "terminal_id": None,
+            "envid": None,
+            "connected_since": None,
+            "last_pong": None,
+            "reconnects": 0,
+            "last_error": "",
+        }
+
+    def state(self) -> dict:
+        with self._lock:
+            return dict(self._state)
+
+    def _connect_owner(self, entry: dict) -> None:
+        cookie = str(entry.get("cookie") or "")
+        envid = str(entry.get("envid") or "")
+        terminal_id = str(entry.get("terminal_id") or "")
+        url = (
+            TERMINAL_BASE.replace("https", "wss")
+            + f"/api/v1/users/hosts/vms/{envid}/terminals/connect?terminal_id={terminal_id}"
+        )
+        self._ws = websocket.create_connection(
+            url, timeout=20, header={"Cookie": cookie, "User-Agent": "jiankong/1.0"}
+        )
+
+    def _connect_share(self, entry: dict) -> None:
+        terminal_id = str(entry.get("terminal_id") or "")
+        password = str(entry.get("password") or "")
+        url = (
+            TERMINAL_BASE.replace("https", "wss")
+            + f"/api/v1/users/hosts/vms/terminals/join?terminal_id={terminal_id}&password={password}"
+        )
+        self._ws = websocket.create_connection(url, timeout=20, header={"User-Agent": "jiankong/1.0"})
+
+    def _connect(self, entry: dict) -> None:
+        if str(entry.get("cookie") or "") and str(entry.get("envid") or ""):
+            self._connect_owner(entry)
+            return
+        self._connect_share(entry)
+
+    def _set(self, **patch) -> None:
+        with self._lock:
+            self._state.update(patch)
+
+    def _frame(self, raw: bytes | str) -> str:
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8", "replace")
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return ""
+        kind = str(payload.get("type") or "")
+        if kind == "ping":
+            return "ping"
+        if kind in ("error", "data"):
+            data = payload.get("data") or ""
+            if isinstance(data, str) and data.startswith("base64:"):
+                data = base64.b64decode(data[7:]).decode("utf-8", "replace")
+            if kind == "error":
+                raise RuntimeError(str(data)[:200])
+            return str(data)
+        return ""
+
+    def start(self, entry: dict) -> bool:
+        """Open the link; the keepalive thread is started by the caller."""
+        self.stop()
+        self._stop.clear()
+        try:
+            self._connect(entry)
+        except Exception as exc:  # noqa: BLE001 - report every handshake failure
+            self._set(status="error", last_error=f"{type(exc).__name__}: {str(exc)[:160]}", connected_since=None)
+            return False
+        mode = "owner" if str(entry.get("cookie") or "") else "share"
+        self._set(
+            status="connected",
+            mode=mode,
+            terminal_id=str(entry.get("terminal_id") or ""),
+            envid=str(entry.get("envid") or ""),
+            connected_since=time.time(),
+            last_pong=time.time(),
+            last_error="",
+        )
+        return True
+
+    def stop(self) -> None:
+        self._stop.set()
+        ws = self._ws
+        self._ws = None
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:  # noqa: BLE001 - closing an already-dead socket
+                pass
+        self._set(status="disconnected", connected_since=None)
+
+    def _heartbeat(self, entry: dict) -> None:
+        """Ping forever; reconnect with the same cookie when forced off."""
+        backoff = 5
+        while not self._stop.is_set():
+            ws = self._ws
+            if ws is None:
+                break
+            try:
+                ws.send(json.dumps({"type": "ping", "data": ""}))
+                raw = ws.recv()
+                kind = self._frame(raw)
+                if kind:
+                    self._set(last_pong=time.time())
+                backoff = 5
+            except Exception as exc:  # noqa: BLE001 - any frame error means the link died
+                if self._stop.is_set():
+                    break
+                # Forced off (server restart, idle reaping, route change): the
+                # cookie is still valid, so re-establish the same link instead of
+                # waiting for a human.
+                self._set(status="reconnecting", last_error=f"{type(exc).__name__}: {str(exc)[:160]}")
+                try:
+                    self._connect(entry)
+                    self._set(
+                        status="connected",
+                        connected_since=time.time(),
+                        last_pong=time.time(),
+                        reconnects=int(self._state.get("reconnects") or 0) + 1,
+                        last_error="",
+                    )
+                    backoff = 5
+                except Exception as inner:  # noqa: BLE001 - keep retrying on the next tick
+                    self._set(status="error", last_error=f"重连失败：{type(inner).__name__}: {str(inner)[:160]}")
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
+            time.sleep(10)
+
+
+def terminal_manager() -> TerminalManager:
+    """Single long-lived manager; created once and reused for the process life."""
+    with TERMINAL_LOCK:
+        manager = _TERMINAL["manager"]
+        if manager is None:
+            manager = TerminalManager()
+            _TERMINAL["manager"] = manager
+        return manager
+
+
+def terminal_autostart() -> None:
+    """Reopen the saved link on boot so a panel restart never loses it."""
+    entry = _load_terminal_config()
+    if not entry.get("enabled") or not entry.get("terminal_id"):
+        return
+    manager = terminal_manager()
+    if manager.start(entry):
+        threading.Thread(
+            target=manager._heartbeat, args=(entry,), name="terminal-link", daemon=True
+        ).start()
+
+
+def terminal_apply(body: dict) -> dict:
+    """Save the terminal target and bring the link up immediately."""
+    entry = {
+        "enabled": True,
+        "label": str(body.get("label") or "")[:60],
+        "envid": str(body.get("envid") or "").strip(),
+        "terminal_id": str(body.get("terminal_id") or "").strip(),
+        "cookie": str(body.get("cookie") or "").strip(),
+        "password": str(body.get("password") or "").strip(),
+    }
+    if not entry["terminal_id"]:
+        raise ValueError("请填写终端 ID")
+    has_owner = bool(entry["cookie"]) and bool(entry["envid"])
+    has_share = bool(entry["password"])
+    if not has_owner and not has_share:
+        raise ValueError("同账号连接需提供 Cookie（自动识别时已带入）；跨账号连接需提供分享密码")
+    if has_share and not has_owner:
+        entry["envid"] = ""
+        entry["cookie"] = ""
+    _save_terminal_config(entry)
+    manager = terminal_manager()
+    ok = manager.start(entry)
+    if ok:
+        threading.Thread(
+            target=manager._heartbeat, args=(entry,), name="terminal-link", daemon=True
+        ).start()
+    return {"ok": ok, "entry": terminal_redact(entry), "state": manager.state()}
+
+
+def terminal_disable() -> dict:
+    entry = _load_terminal_config()
+    entry["enabled"] = False
+    _save_terminal_config(entry)
+    terminal_manager().stop()
+    return {"ok": True, "state": terminal_manager().state()}
+
+
+def terminal_status() -> dict:
+    entry = _load_terminal_config()
+    manager = terminal_manager()
+    state = manager.state()
+    now = time.time()
+    since = state.get("connected_since")
+    uptime = None
+    if since and state.get("status") == "connected":
+        uptime = int(now - float(since))
+    stale = False
+    last_pong = state.get("last_pong")
+    if state.get("status") == "connected" and last_pong:
+        stale = (now - float(last_pong)) > 45
+    return {
+        "configured": bool(entry.get("terminal_id")),
+        "enabled": bool(entry.get("enabled")),
+        "entry": terminal_redact(entry),
+        "link": state,
+        "uptime_seconds": uptime,
+        "stale": stale,
+        "remote_count": None,
+    }
+
+
+def terminal_discover(cookie: str, envid: str) -> dict:
+    """One-click recognition: list the account's live terminals and pick one."""
+    code, items = terminal_list_api(cookie, envid)
+    if code != 200:
+        return {"ok": False, "error": "无法用该 Cookie 读取终端列表（Cookie 可能已过期）"}
+    if not items:
+        return {"ok": False, "error": "该账号下没有发现在线终端"}
+    # Prefer a terminal that already has live connections: it is the active shell.
+    items.sort(key=lambda x: int(x.get("connected_count") or 0), reverse=True)
+    chosen = items[0]
+    return {
+        "ok": True,
+        "envid": envid,
+        "terminal_id": chosen["id"],
+        "title": chosen["title"],
+        "connected_count": chosen["connected_count"],
+        "terminals": items,
+    }
 RESOURCE_HISTORY = collections.deque(maxlen=1200)
 RESOURCE_LOCK = threading.Lock()
 RESOURCE_LAST: dict = {"at": 0.0, "cpu": None, "net": None}
@@ -1344,6 +1658,18 @@ class Handler(BaseHTTPRequestHandler):
             except RuntimeError as exc:
                 self.send_json(503, {"error": str(exc)})
             return
+        if asset_path == "/api/terminal/status":
+            if not self.authorized():
+                self.send_json(401, {"error": "需要登录密码"})
+                return
+            self.send_json(200, terminal_status())
+            return
+        if asset_path == "/api/terminal/config":
+            if not self.authorized():
+                self.send_json(401, {"error": "需要登录密码"})
+                return
+            self.send_json(200, {"available": TERMINAL_WS_AVAILABLE, **terminal_status()})
+            return
         if asset_path == "/api/guardian/status":
             # Read-only Worker state, but it exposes the upstream origin, taskId
             # and credential health, so it needs the same token as everything else.
@@ -1375,6 +1701,36 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": "Not found"})
 
     def do_POST(self) -> None:
+        if self.path == "/api/terminal/discover":
+            if not self.authorized():
+                self.send_json(401, {"error": "登录密码无效"})
+                return
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+                self.send_json(200, terminal_discover(str(body.get("cookie", "")), str(body.get("envid", ""))))
+            except (ValueError, OSError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+            return
+        if self.path == "/api/terminal/setup":
+            if not self.authorized():
+                self.send_json(401, {"error": "登录密码无效"})
+                return
+            if not TERMINAL_WS_AVAILABLE:
+                self.send_json(503, {"error": "本机缺少 websocket-client 组件，无法建立终端长连接；请在 VM 安装 python3-websocket-client"})
+                return
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+                result = terminal_apply(body)
+                self.send_json(200 if result.get("ok") else 502, result)
+            except (ValueError, OSError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+            return
+        if self.path == "/api/terminal/disable":
+            if not self.authorized():
+                self.send_json(401, {"error": "登录密码无效"})
+                return
+            self.send_json(200, terminal_disable())
+            return
         if self.path == "/api/guardian/quick-setup":
             if not self.authorized():
                 self.send_json(401, {"error": "登录密码无效"})
@@ -1550,6 +1906,9 @@ if __name__ == "__main__":
     threading.Thread(target=auto_sync_watcher, name="auto-sync", daemon=True).start()
     threading.Thread(target=watchdog_supervisor, name="watchdog-keeper", daemon=True).start()
     threading.Thread(target=persist_stop_suppress, name="persist-stop", daemon=True).start()
+    # Reopen the saved terminal link on boot; watchdog respawns this process, and
+    # the link must come back with it instead of waiting for a human.
+    terminal_autostart()
     persist_stop_load()
     # Watchdog loop: if the HTTP server dies (crash, OOM kill, port race), the
     # whole process exits and this loop restarts it. firecracker-init does not
