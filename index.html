@@ -176,6 +176,9 @@ svg.resource-spark path{fill:none;stroke:var(--brand);stroke-width:1.6;vector-ef
 .card .name,.card .desc,.card .pill,.card .task-time{overflow-wrap:anywhere}
 @media(max-width:1100px){.resource-strip{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:760px){
+ .hero>div:last-child{flex:0 0 100%;width:100%;min-width:0;flex-wrap:nowrap;gap:8px}
+ .hero>div:last-child>.health{flex:1 1 0;min-width:0}
+ .hero>div:last-child>.egress-chip{flex:1 1 0;min-width:0;max-width:none}
  .shell{padding:12px 12px calc(28px + env(safe-area-inset-bottom))}
  .hero{gap:10px}
  .hero .meta{max-width:100%;overflow-wrap:anywhere}

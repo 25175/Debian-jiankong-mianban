@@ -157,8 +157,7 @@ BUILTIN_PLUGINS = {
         "port": PORT,
     },
     "monkeycode-login-browser": {
-        "name": "MonkeyCode 登录浏览器",
-        "description": "一键安装 Chromium、中文字体、Xvfb、受控 VNC/noVNC；用于登录后自动同步 Cookie",
+        "description": "安装 Chromium、中文字体、Xvfb、受控 VNC/noVNC 与运行依赖，供浏览器会话、交互操作、MonkeyCode 登录及 Cookie 同步等功能按需共用",
         "route": "/guardian/",
         "port": PORT,
         "installable": True,
