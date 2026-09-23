@@ -245,7 +245,7 @@ function showLogin(){loginPage.hidden=false;appMain.hidden=true;loginPassword.va
 function logout(){localStorage.removeItem(KEY);token.value='';showLogin()}
 loginForm.addEventListener('submit',e=>{e.preventDefault();const v=loginPassword.value.trim();if(!v){loginError.textContent='请输入登录密码';return}
   token.value=v;localStorage.setItem(KEY,v);
-  api('/api/guardian/status').then(()=>{loginError.textContent='';showApp()}).catch(err=>{localStorage.removeItem(KEY);token.value='';loginError.textContent='登录失败：'+(err.message||'密码错误')})});
+  api('/api/status').then(()=>{loginError.textContent='';showApp()}).catch(err=>{localStorage.removeItem(KEY);token.value='';loginError.textContent='登录失败：'+(err.message||'密码错误')})});
 if(token.value)showApp();else showLogin();
 
 /* ---------- theme: auto / light / dark ---------- */
