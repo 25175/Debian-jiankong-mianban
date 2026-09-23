@@ -1,5 +1,5 @@
 {
-  "name": "Debian 服务监控面板",
+  "name": "服务监控面板",
   "listen": {
     "host": "0.0.0.0",
     "port": 8888

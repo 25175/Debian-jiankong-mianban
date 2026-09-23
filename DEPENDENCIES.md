@@ -13,7 +13,9 @@
 
 ## Python 依赖
 
-无第三方 Python 包。仅使用 Python 3 标准库。
+- `websocket-client`：`monkeycode_browser.py` 通过 Chromium DevTools 读取登录 Cookie 时使用。一键安装插件时会自动 `pip3 install`；手动部署需先执行 `pip3 install websocket-client`。
+
+其余模块仅使用 Python 3 标准库。
 
 ## 服务器依赖
 
