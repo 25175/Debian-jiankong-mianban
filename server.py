@@ -385,16 +385,22 @@ def quick_worker_setup(worker_domain: str, admin_password: str, host_header: str
     domain = re.sub(r"^https?://", "", domain).rstrip("/")
     if not re.fullmatch(r"[a-z0-9._-]+\.[a-z]{2,}", domain):
         raise ValueError("请输入有效的 work 域名，例如 ce.example.com")
-    # The preview host of this monitor is <port>-<env hex>.monkeycode-ai.online;
-    # the 8787 upstream of the same environment shares the env hex.
+    # Discover the task id. The preview host of this monitor is
+    # <port>-<task-uuid>.monkeycode-ai.online, so the host minus the port prefix
+    # is the task id itself (verified on both deployed environments). 8787 is
+    # only queried as a fallback for hosts that do not follow that pattern.
     preview_host = public_host(host_header or "")
     upstream = ""
     task_id = ""
-    match = re.match(r"^\d+-(?P<hex>[0-9a-f]{16})\.monkeycode-ai\.online$", preview_host)
+    match = re.match(r"^\d+-(?P<task>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.monkeycode-ai\.online$", preview_host)
     if match:
-        upstream = f"https://8787-{match.group('hex')}.monkeycode-ai.online"
-    # Discover the task id from the platform API of the same environment.
-    if upstream:
+        task_id = match.group("task")
+        upstream = f"https://8787-{match.group('task')[:16]}.monkeycode-ai.online"
+    else:
+        match = re.match(r"^\d+-(?P<hex>[0-9a-f]{16})\.monkeycode-ai\.online$", preview_host)
+        if match:
+            upstream = f"https://8787-{match.group('hex')}.monkeycode-ai.online"
+    if upstream and not task_id:
         try:
             request = Request(f"{upstream}/api/tasks", headers={"User-Agent": "jiankong/1.0"})
             with build_opener(ProxyHandler({})).open(request, timeout=6) as response:
