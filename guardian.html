@@ -208,8 +208,10 @@ summary{cursor:pointer;font-size:12.5px}
     <article class="card metric"><small>接入状态</small><strong id="ready">读取中</strong><span id="readySub" class="label">—</span></article>
     <article class="card metric"><small>Worker / KV</small><strong id="worker">—</strong><span id="workerSub" class="label">—</span></article>
     <article class="card metric"><small>MonkeyCode 上游</small><strong id="upstream">—</strong><span id="upstreamSub" class="label">—</span></article>
-    <article class="card metric"><small>自动保活</small><strong id="keepalive">—</strong><span id="keepaliveSub" class="label">—</span></article>
+    <article class="card metric"><small>协议保活</small><strong id="keepalive">—</strong><span id="keepaliveSub" class="label">—</span></article>
   </div>
+
+  <div class="section-head"><h2>协议保活（Cloudflare Worker）</h2><span>Worker 定时代理保活与凭据管理，与下方终端长连接相互独立</span></div>
 
   <div class="section-head"><h2>VM 登录浏览器</h2><span>Cookie 过期后在此重新登录并同步</span></div>
   <section class="two">
@@ -272,35 +274,34 @@ summary{cursor:pointer;font-size:12.5px}
     </article>
   </section>
 
-  <div class="section-head"><h2>远程终端长连接</h2><span>由本机 8888 服务器维持，断开后自动用 Cookie 恢复</span></div>
-  <section class="two">
-    <article class="card">
-      <div class="credential-row">
-        <span class="label" id="terminalState">终端连接状态读取中</span>
-        <button class="btn primary" id="termDiscoverBtn" onclick="terminalDiscover()">一键识别并连接</button>
-        <button class="btn" id="termDisableBtn" onclick="terminalDisable()">断开</button>
-      </div>
-      <div class="config" style="margin-top:12px">
-        <label class="wide">MonkeyCode Cookie（同账号自动识别用，保存后不再回显）<input id="termCookie" type="password" placeholder="monkeycode_ai_session=…" autocomplete="off"></label>
-        <label>环境 / VM ID<input id="termEnvid" placeholder="agent_xxxx-…（自动识别时自动填入）" autocomplete="off"></label>
-        <label>终端 ID<input id="termTerminalId" placeholder="自动识别，或手动填写 / 跨账号粘贴" autocomplete="off"></label>
-        <label class="wide">分享密码（仅跨账号连接另一台终端时填写）<input id="termPassword" type="password" placeholder="对方终端的分享密码，留空走同账号 Cookie 通道" autocomplete="off"></label>
-      </div>
-      <p class="label" style="margin:10px 0 0;color:var(--muted);font-size:11.5px;line-height:1.55">
-        填 Cookie 点“一键识别并连接”，自动列出该账号在线终端并连上；本机断开（重启 / 被踢）后用同一 Cookie 自动恢复。
-        连接由 8888 所在服务器持有，不依赖本地 agent；Cookie / 密码只存本机 600 权限文件，永不回显。</p>
-    </article>
-    <article class="card">
-      <h3 style="margin:0 0 8px;font-size:14px">连接详情</h3>
-      <div class="readback" style="grid-template-columns:repeat(2,minmax(0,1fr))">
-        <div><small>连接状态</small><strong id="tb-status">—</strong></div>
-        <div><small>连接通道</small><strong id="tb-mode">—</strong></div>
-        <div><small>已连接时长</small><strong id="tb-uptime">—</strong></div>
-        <div><small>自动重连次数</small><strong id="tb-reconnects">—</strong></div>
-        <div class="wide" style="grid-column:1/-1"><small>终端 / 最近说明</small><strong id="tb-detail">—</strong></div>
-      </div>
-    </article>
+  <div class="section-head"><h2>远程终端长连接</h2><span>每个连接独立保活，账户互不影响</span></div>
+  <div class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:14px">
+    <article class="card metric"><small>终端连接数</small><strong id="termCountTotal">—</strong><span class="label">已添加的独立连接</span></article>
+    <article class="card metric"><small>在线连接</small><strong id="termCountOnline">—</strong><span class="label">WebSocket 保持中</span></article>
+    <article class="card metric"><small>重连总计</small><strong id="termCountReconnects">—</strong><span class="label">所有连接累计自动重连</span></article>
+  </div>
+  <section class="card" style="margin-bottom:18px">
+    <div class="config" style="grid-template-columns:1fr;gap:10px">
+      <label>粘贴连接信息自动识别（终端 ID、分享密码、Cookie 或它们的组合）<textarea id="termPaste" rows="2" placeholder="例如：https://monkeycode-ai.com/share?terminal_id=xxxx&password=xxxx 或直接粘贴 Cookie / 终端 ID" autocomplete="off" style="width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 10px;outline:0;font:inherit;resize:vertical"></textarea></label>
+    </div>
+    <div class="toolbar" style="margin-top:10px">
+      <button class="btn primary" id="termDiscoverBtn" onclick="terminalDiscover()">识别并连接</button>
+      <span id="termDiscoverNote" class="label" style="align-self:center;color:var(--muted);font-size:11.5px"></span>
+    </div>
+    <div id="termFields" class="config" style="margin-top:12px;display:none">
+      <label class="wide">备注名称<input id="termLabel" placeholder="可选，例如：主服务器 / 同事的开发机" autocomplete="off"></label>
+      <label>终端 ID<input id="termTerminalId" placeholder="自动识别或手动填写" autocomplete="off"></label>
+      <label>分享密码（跨账号连接时必填，同账号留空）<input id="termPassword" type="password" placeholder="对方终端的分享密码" autocomplete="off"></label>
+      <label class="wide">MonkeyCode Cookie（同账号连接必填；跨账号无需填写）<input id="termCookie" type="password" placeholder="monkeycode_ai_session=… 保存后不再回显" autocomplete="off"></label>
+      <label>环境 / VM ID（同账号连接用，一般自动填入）<input id="termEnvid" placeholder="agent_xxxx-…" autocomplete="off"></label>
+      <input type="hidden" id="termEditId">
+    </div>
+    <p class="label" style="margin:10px 0 0;color:var(--muted);font-size:11.5px;line-height:1.55">
+      粘贴后点「识别并连接」自动解析并建立连接；同账号连接用 Cookie，跨账号连接用终端 ID + 分享密码，二者不混用。
+      每个连接由 8888 所在服务器独立持有并独立保活，互不影响；Cookie / 密码只存本机 600 权限文件，永不回显。</p>
   </section>
+
+  <div id="termList" class="two" style="align-items:start"></div>
 
   <div class="section-head"><h2>Worker 实时读回</h2><span>排障用原始数据</span></div>
   <section class="card">
@@ -366,13 +367,70 @@ async function syncLoginBrowser(){try{const r=await api('/api/login-browser/sync
 async function probe(){try{const r=await api('/api/guardian/probe',{method:'POST'});await watchAction(r.action,'上游探测')}catch(e){say('探测提交失败：'+e.message,true)}}
 async function quickSetup(){const d=$('quickDomain').value.trim();if(!d)return say('请输入 work 域名',true);const btn=$('quickBtn');btn.disabled=true;btn.textContent='正在接入并写入 KV…';try{const r=await api('/api/guardian/quick-setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({worker_domain:d,worker_admin_password:$('quickPassword').value})});btn.disabled=false;btn.textContent='一键接入';if(r.ok){say(`已通过 ${d} 接入 Worker，配置已写入 KV 并立即生效`);$('quickPassword').value='';await load(true)}else{say(`接入失败：${r.worker?.error||r.error||'Worker 未确认'}`,true);if(r.derived)console.warn('derived',r.derived)}}catch(e){btn.disabled=false;btn.textContent='一键接入';say('接入失败：'+e.message,true)}}
 async function keepaliveNow(){try{const r=await api('/api/guardian/keepalive',{method:'POST'});await watchAction(r.action,'立即保活')}catch(e){say('保活提交失败：'+e.message,true)}}
-/* ---------- remote terminal long link ---------- */
+/* ---------- remote terminal long links (independent, multi-account) ---------- */
 const TERM_STATUS={connected:'已连接',reconnecting:'重连中',error:'连接异常',disconnected:'未连接'};
 function fmtDur(sec){const n=Number(sec||0);if(!n)return '—';const d=Math.floor(n/86400),h=Math.floor(n/3600)%24,m=Math.floor(n/60)%60,s=n%60;return (d?d+'天 ':'')+(h?String(h).padStart(2,'0')+':':'00:')+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')}
-function renderTerminal(t){if(!t)return;const link=t.link||{};const st=TERM_STATUS[link.status]||link.status||'未连接';const e=$('tb-status');e.textContent=st;e.className=link.status==='connected'?'good':(link.status==='reconnecting'?'warn':(link.status==='error'?'bad':''));$('tb-mode').textContent=link.mode==='owner'?'同账号 Cookie 通道':(link.mode==='share'?'跨账号分享密码':'—');$('tb-uptime').textContent=fmtDur(t.uptime_seconds);$('tb-reconnects').textContent=String(link.reconnects||0);const tid=(t.entry&&t.entry.terminal_id)||link.terminal_id||'未配置';$('tb-detail').textContent=tid+(link.last_error?' · '+link.last_error:(t.stale?' · 心跳超时':''));$('terminalState').textContent=t.configured?(t.enabled?('长连接'+st.toLowerCase()+' · '+tid):'已配置但未启用'):(t.available===false?'本机缺少 websocket-client 组件':'尚未配置终端');$('termTerminalId').value=$('termTerminalId').value||(t.entry&&t.entry.terminal_id)||'';$('termEnvid').value=$('termEnvid').value||(t.entry&&t.entry.envid)||'';if(!t.entry||!t.entry.cookie)$('termCookie').placeholder='monkeycode_ai_session=…（保存后不再回显）'}
-async function loadTerminal(){try{renderTerminal(await api('/api/terminal/config'))}catch(e){if(e.name!=='AbortError')$('terminalState').textContent='终端状态读取失败：'+e.message}}
-async function terminalDiscover(){const ck=$('termCookie').value.trim();if(!ck)return say('请先填写 MonkeyCode Cookie',true);const btn=$('termDiscoverBtn');btn.disabled=true;btn.textContent='正在识别…';try{const r=await api('/api/terminal/discover',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cookie:ck,envid:$('termEnvid').value.trim()})});if(!r.ok)throw Error(r.error||'未识别到终端');say(`已识别终端「${r.title||r.terminal_id}」（在线 ${r.connected_count} 个连接）`);const res=await api('/api/terminal/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:r.title||'',envid:r.envid,terminal_id:r.terminal_id,cookie:ck})});if(!res.ok)throw Error(res.state&&res.state.last_error||'连接失败');say('终端长连接已建立，由本机服务器维持');$('termCookie').value='';await loadTerminal()}catch(e){say('一键识别连接失败：'+e.message,true)}finally{btn.disabled=false;btn.textContent='一键识别并连接'}}
-async function terminalDisable(){try{await api('/api/terminal/disable',{method:'POST'});say('终端长连接已断开');await loadTerminal()}catch(e){say('断开失败：'+e.message,true)}}
+function termCard(l){
+  const st=l.state||{};const status=TERM_STATUS[st.status]||st.status||'未连接';
+  const mode=st.mode==='owner'?'同账号 Cookie 通道':(st.mode==='share'?'跨账号分享密码':'—');
+  const tid=(l.entry&&l.entry.terminal_id)||'未配置';
+  const label=esc(l.label||tid);
+  const cls=st.status==='connected'?'good':(st.status==='reconnecting'?'warn':(st.status==='error'?'bad':''));
+  const err=st.last_error?(' · '+esc(st.last_error)):(l.stale?' · 心跳超时':'');
+  return `<article class="card">
+    <div class="credential-row" style="align-items:flex-start">
+      <span class="label" style="min-width:0"><b style="color:var(--text)">${label}</b><br><span style="font-size:11px;color:var(--muted)">${esc(tid)}</span></span>
+      <button class="btn" onclick="terminalToggle('${l.id}',${l.enabled?'false':'true'})">${l.enabled?'断开':'连接'}</button>
+      <button class="btn warn" onclick="terminalDelete('${l.id}')">删除</button>
+    </div>
+    <div class="readback" style="grid-template-columns:repeat(2,minmax(0,1fr));margin-top:10px">
+      <div><small>连接状态</small><strong class="${cls}">${status}</strong></div>
+      <div><small>连接通道</small><strong>${mode}</strong></div>
+      <div><small>已连接时长</small><strong>${fmtDur(l.uptime_seconds)}</strong></div>
+      <div><small>自动重连次数</small><strong>${st.reconnects||0}</strong></div>
+      <div class="wide" style="grid-column:1/-1"><small>最近说明</small><strong>${err||'—'}</strong></div>
+    </div>
+  </article>`;
+}
+function renderTerminal(t){
+  if(!t)return;
+  $('termCountTotal').textContent=String(t.total||0);
+  $('termCountOnline').textContent=String(t.connected||0);
+  $('termCountOnline').className=(t.connected>0)?'good':'';
+  $('termCountReconnects').textContent=String((t.links||[]).reduce((a,l)=>a+((l.state&&l.state.reconnects)||0),0));
+  const list=$('termList');
+  if(t.available===false){list.innerHTML='<article class="card"><p class="empty">本机缺少 websocket-client 组件，无法建立终端长连接；请在 VM 安装 python3-websocket-client。</p></article>';return}
+  if(!t.links||!t.links.length){list.innerHTML='<article class="card"><p class="empty">尚未添加终端连接。粘贴连接信息后点「识别并连接」。</p></article>';return}
+  list.innerHTML=t.links.map(termCard).join('');
+}
+async function loadTerminal(){try{renderTerminal(await api('/api/terminal/status'))}catch(e){if(e.name!=='AbortError')console.warn('terminal status failed',e)}}
+function termBody(){return {paste:$('termPaste').value,label:$('termLabel').value,terminal_id:$('termTerminalId').value,password:$('termPassword').value,cookie:$('termCookie').value,envid:$('termEnvid').value,id:$('termEditId').value}}
+function termFillFromDiscover(r){
+  if(r.label)$('termLabel').value=r.label;
+  if(r.terminal_id)$('termTerminalId').value=r.terminal_id;
+  if(r.envid)$('termEnvid').value=r.envid;
+  if(r.password)$('termPassword').value='';
+  $('termFields').style.display='grid';
+}
+async function terminalDiscover(){
+  const paste=$('termPaste').value.trim();
+  if(!paste)return say('请先粘贴连接信息',true);
+  const btn=$('termDiscoverBtn');btn.disabled=true;btn.textContent='正在识别…';$('termDiscoverNote').textContent='';
+  try{
+    const r=await api('/api/terminal/discover',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(termBody())});
+    if(!r.ok)throw Error(r.error||'未识别到有效信息');
+    termFillFromDiscover(r);
+    $('termDiscoverNote').textContent=r.note||'已识别，正在连接…';
+    const res=await api('/api/terminal/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(termBody())});
+    if(!res.ok)throw Error((res.state&&res.state.last_error)||'连接失败');
+    say('终端长连接已建立，由本机服务器独立保活');
+    $('termPaste').value='';$('termLabel').value='';$('termTerminalId').value='';$('termPassword').value='';$('termCookie').value='';$('termEnvid').value='';$('termEditId').value='';
+    $('termFields').style.display='none';$('termDiscoverNote').textContent='';
+    await loadTerminal();
+  }catch(e){say('识别连接失败：'+e.message,true)}finally{btn.disabled=false;btn.textContent='识别并连接'}
+}
+async function terminalToggle(id,on){try{await api(on?'/api/terminal/setup':'/api/terminal/disable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(on?{id}:{}),});say(on?'连接已建立':'连接已断开');await loadTerminal()}catch(e){say((on?'连接':'断开')+'失败：'+e.message,true)}}
+async function terminalDelete(id){if(!confirm('删除该终端连接？保存的凭据会一并移除。'))return;try{await api('/api/terminal/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});say('终端连接已删除');await loadTerminal()}catch(e){say('删除失败：'+e.message,true)}}
 if(token.value){load();loadTerminal();}
 setInterval(()=>{if(document.hidden||!requireLogin())return;load();loadTerminal()},12000);
 function requireLogin(){if(token.value.trim())return true;showLogin();return false}
