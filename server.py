@@ -385,10 +385,9 @@ def quick_worker_setup(worker_domain: str, admin_password: str, host_header: str
     domain = re.sub(r"^https?://", "", domain).rstrip("/")
     if not re.fullmatch(r"[a-z0-9._-]+\.[a-z]{2,}", domain):
         raise ValueError("请输入有效的 work 域名，例如 ce.example.com")
-    # Discover the task id. The VM hostname is the task uuid itself
-    # (verified on both deployed environments); the preview host is only a
-    # 16-hex truncation, so it cannot carry the full id. Fall back to the
-    # preview host and then to the 8787 API for hosts that follow neither.
+    # task id comes from the VM hostname (it is the task uuid); the 8787
+    # upstream hex comes from the preview host, which is a separate short id
+    # (not a truncation of the task uuid). 8787 API is the last fallback.
     preview_host = public_host(host_header or "")
     upstream = ""
     task_id = ""
@@ -399,11 +398,9 @@ def quick_worker_setup(worker_domain: str, admin_password: str, host_header: str
     match = re.fullmatch(r"(?P<task>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", (vm_host or "").strip())
     if match:
         task_id = match.group("task")
-        upstream = f"https://8787-{task_id[:16]}.monkeycode-ai.online"
-    else:
-        match = re.match(r"^\d+-(?P<hex>[0-9a-f]{16})\.monkeycode-ai\.online$", preview_host)
-        if match:
-            upstream = f"https://8787-{match.group('hex')}.monkeycode-ai.online"
+    match = re.match(r"^\d+-(?P<hex>[0-9a-f]{16})\.monkeycode-ai\.online$", preview_host)
+    if match:
+        upstream = f"https://8787-{match.group('hex')}.monkeycode-ai.online"
     if upstream and not task_id:
         try:
             request = Request(f"{upstream}/api/tasks", headers={"User-Agent": "jiankong/1.0"})
