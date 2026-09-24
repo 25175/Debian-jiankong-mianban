@@ -128,30 +128,33 @@ summary{cursor:pointer;font-size:12.5px}
 .topbar .notice{flex-basis:100%;min-height:0}
 @media(max-width:1100px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:900px){.two{grid-template-columns:minmax(0,1fr)}}
-/* Worker keepalive and terminal links are peer groups on wide screens. */
-.status-groups{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start;gap:16px}
-.status-group{min-width:0;padding:16px;border:1px solid var(--line);border-radius:18px;background:color-mix(in srgb,var(--panel) 74%,var(--bg));box-shadow:var(--shadow)}
-.status-group>.section-head:first-child{margin:2px 0 12px}
-.status-group .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-.status-group .status-metrics{margin-bottom:12px}
-.status-group .worker-overview{grid-template-columns:repeat(2,minmax(0,1fr))}
-.status-group .worker-overview .card:last-child{grid-column:1/-1}
-.status-group .term-list{display:grid;grid-template-columns:1fr;gap:10px;align-items:start}
-.status-group .term-card{padding:12px;box-shadow:none}
-.status-group .term-card-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
-.status-group .term-card-actions .btn{min-height:36px;padding:6px 10px}
+/* Two browser-style tabs keep the Worker and terminal workspaces separate. */
+.main-tabs{display:flex;align-items:flex-end;gap:4px;margin:10px 0 0;padding:0 8px;border-bottom:1px solid var(--line);overflow-x:auto}
+.main-tabs [role=tab]{position:relative;display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 18px;border:1px solid transparent;border-bottom:0;border-radius:10px 10px 0 0;background:transparent;color:var(--muted);font:inherit;font-size:13px;font-weight:650;white-space:nowrap;cursor:pointer}
+.main-tabs [role=tab]:hover{background:var(--panel-2);color:var(--text)}
+.main-tabs [role=tab][aria-selected=true]{background:var(--panel);border-color:var(--line);color:var(--brand)}
+.main-tabs [role=tab][aria-selected=true]::after{position:absolute;right:0;bottom:-1px;left:0;height:2px;background:var(--panel);content:""}
+.main-tabs .tab-count{display:inline-grid;place-items:center;min-width:21px;height:21px;padding:0 6px;border-radius:999px;background:var(--bg-2);color:var(--text-2);font-size:11px}
+.main-tabs [aria-selected=true] .tab-count{background:var(--brand-2);color:var(--brand)}
+.tab-panels{min-width:0;padding-top:16px}
+.tab-panel[hidden]{display:none!important}
 .term-list-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 10px}
 .term-list-head>strong{font-size:13px}
 .term-filters{display:flex;gap:6px;flex-wrap:wrap}
 .term-filters .btn{min-height:34px;padding:5px 10px;font-size:12px}
 .term-filters .btn.active{background:var(--brand-2);color:var(--brand);border-color:var(--brand)}
-.status-group .term-card .readback{grid-template-columns:repeat(2,minmax(0,1fr))!important}
-.status-group .term-card .readback .wide{grid-column:1/-1}
-.status-group .term-add{margin-bottom:12px}
-@media(max-width:1050px){.status-groups{grid-template-columns:minmax(0,1fr)}}
+.term-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
+.term-card{padding:12px}
+.term-card-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+.term-card-actions .btn{min-height:36px;padding:6px 10px}
+.term-card .readback{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+.term-card .readback .wide{grid-column:1/-1}
+.term-add{margin-bottom:12px}
 @media(max-width:760px){
- .status-group{padding:11px}
- .status-group .worker-overview{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .main-tabs{padding:0 2px}
+ .main-tabs [role=tab]{flex:1;justify-content:center;min-height:46px;padding:0 10px}
+ .tab-panels{padding-top:12px}
+ .term-list{grid-template-columns:minmax(0,1fr)}
  .shell{padding:12px 12px calc(28px + env(safe-area-inset-bottom))}
  .hero{margin-bottom:12px}
  .topbar{gap:6px;padding:8px}
@@ -226,8 +229,13 @@ summary{cursor:pointer;font-size:12.5px}
     <span id="notice" class="notice"></span>
   </section>
 
-  <div class="status-groups">
-  <section class="status-group" id="workerKeepaliveGroup">
+  <div class="main-tabs" role="tablist" aria-label="状态中心分组">
+    <button class="active" id="workerTab" role="tab" aria-selected="true" aria-controls="workerTabPanel" tabindex="0" onclick="setMainTab('worker')">Worker 保活</button>
+    <button id="terminalTab" role="tab" aria-selected="false" aria-controls="terminalTabPanel" tabindex="-1" onclick="setMainTab('terminal')">远程终端长连接 <span class="tab-count" id="terminalTabCount">—</span></button>
+  </div>
+  <div class="tab-panels">
+  <section class="tab-panel" id="workerTabPanel" role="tabpanel" aria-labelledby="workerTab">
+  <section id="workerKeepaliveGroup">
   <div class="section-head"><h2>Worker 保活</h2><span>定时代理、上游探测及 Cloudflare KV 状态</span></div>
   <div class="grid worker-overview">
     <article class="card metric"><small>MonkeyCode Cookie</small><strong id="credential">读取中</strong><span id="credentialSub" class="label">—</span></article>
@@ -313,8 +321,10 @@ summary{cursor:pointer;font-size:12.5px}
   </section>
 
   </section>
+  </section>
 
-  <section class="status-group" id="remoteTerminalGroup">
+  <section class="tab-panel" id="terminalTabPanel" role="tabpanel" aria-labelledby="terminalTab" hidden>
+  <section id="remoteTerminalGroup">
   <div class="section-head"><h2>远程终端长连接</h2><span>每条连接独立保活，可单独管理</span></div>
   <div class="grid status-metrics" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:14px">
     <article class="card metric"><small>终端连接数</small><strong id="termCountTotal">—</strong><span class="label">已添加的独立连接</span></article>
@@ -346,12 +356,13 @@ summary{cursor:pointer;font-size:12.5px}
   <div class="term-list-head"><strong>已添加的终端</strong><div class="term-filters" role="group" aria-label="筛选终端"><button class="btn active" data-term-filter="all" onclick="setTerminalFilter('all')">全部</button><button class="btn" data-term-filter="online" onclick="setTerminalFilter('online')">在线</button><button class="btn" data-term-filter="offline" onclick="setTerminalFilter('offline')">离线 / 异常</button><button class="btn" onclick="loadTerminal()">↻ 刷新</button></div></div>
   <div id="termList" class="term-list"></div>
   </section>
+  </section>
   </div>
 
 </main>
 
 <script>
-const KEY='jiankong-token',THEME_KEY='jiankong-theme';const $=id=>document.getElementById(id);let latest=null,latestTerminal=null,terminalFilter='all',loading=false;const dirtyFields=new Set();for(const id of ['worker_admin_url','upstreamOrigin','taskId','minSeconds','maxSeconds','keepaliveMessage','proxyTimeoutMs','retryAfterSeconds','enabled'])$(id).addEventListener('input',()=>dirtyFields.add(id));
+const KEY='jiankong-token',THEME_KEY='jiankong-theme',TAB_KEY='jiankong-center-tab';const $=id=>document.getElementById(id);let latest=null,latestTerminal=null,terminalFilter='all',loading=false;const dirtyFields=new Set();for(const id of ['worker_admin_url','upstreamOrigin','taskId','minSeconds','maxSeconds','keepaliveMessage','proxyTimeoutMs','retryAfterSeconds','enabled'])$(id).addEventListener('input',()=>dirtyFields.add(id));
 let token={value:localStorage.getItem(KEY)||''};
 /* ---------- login gate ---------- */
 const loginPage=$('loginPage'),appMain=$('appMain'),loginForm=$('loginForm'),loginPassword=$('loginPassword'),loginError=$('loginError');
@@ -429,11 +440,15 @@ function termCard(l){
     </div>
   </article>`;
 }
+function setMainTab(name,save=true){const terminal=name==='terminal';$('workerTab').setAttribute('aria-selected',String(!terminal));$('workerTab').tabIndex=terminal?-1:0;$('terminalTab').setAttribute('aria-selected',String(terminal));$('terminalTab').tabIndex=terminal?0:-1;$('workerTabPanel').hidden=terminal;$('terminalTabPanel').hidden=!terminal;if(save)localStorage.setItem(TAB_KEY,terminal?'terminal':'worker')}
+document.querySelector('.main-tabs').addEventListener('keydown',e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();const terminal=e.key==='ArrowRight'||e.key==='End';const tab=$(terminal?'terminalTab':'workerTab');setMainTab(terminal?'terminal':'worker');tab.focus()});
+setMainTab(localStorage.getItem(TAB_KEY)==='terminal'?'terminal':'worker',false);
 function setTerminalFilter(filter){terminalFilter=filter;document.querySelectorAll('[data-term-filter]').forEach(b=>b.classList.toggle('active',b.dataset.termFilter===filter));if(latestTerminal)renderTerminal(latestTerminal)}
 function renderTerminal(t){
   if(!t)return;
   latestTerminal=t;
   $('termCountTotal').textContent=String(t.total||0);
+  $('terminalTabCount').textContent=String(t.total||0);
   $('termCountOnline').textContent=String(t.connected||0);
   $('termCountOnline').className=(t.connected>0)?'good':'';
   $('termCountReconnects').textContent=String((t.links||[]).reduce((a,l)=>a+((l.state&&l.state.reconnects)||0),0));
