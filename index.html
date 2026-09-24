@@ -285,7 +285,7 @@ let data=null;
 /* ---------- login gate ---------- */
 const loginPage=document.querySelector('#loginPage'),appMain=document.querySelector('#appMain'),loginForm=document.querySelector('#loginForm'),loginPassword=document.querySelector('#loginPassword'),loginError=document.querySelector('#loginError');
 function showApp(){loginPage.hidden=true;appMain.hidden=false;load();loadResources()}
-function showLogin(){loginPage.hidden=false;appMain.hidden=true;loginPassword.value='';loginPassword.focus()}
+function showLogin(){const h=loginPage.hidden;loginPage.hidden=false;appMain.hidden=true;if(h){loginPassword.value='';loginPassword.focus()}}
 function logout(){localStorage.removeItem(TOKEN_KEY);token.value='';showLogin()}
 loginForm.addEventListener('submit',e=>{e.preventDefault();const v=loginPassword.value.trim();if(!v){loginError.textContent='请输入登录密码';return}
   token.value=v;localStorage.setItem(TOKEN_KEY,v);
