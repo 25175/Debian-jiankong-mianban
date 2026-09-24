@@ -128,6 +128,11 @@ summary{cursor:pointer;font-size:12.5px}
 .topbar .notice{flex-basis:100%;min-height:0}
 @media(max-width:1100px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:900px){.two{grid-template-columns:minmax(0,1fr)}}
+/* Worker status details share one overview panel; events remain separate. */
+.worker-status-board{padding:14px;margin-bottom:18px}
+.worker-status-board .worker-overview{margin:0 0 12px}
+.worker-status-board .worker-details{grid-template-columns:repeat(4,minmax(0,1fr))}
+.worker-events{margin-bottom:18px}
 /* Two browser-style tabs keep the Worker and terminal workspaces separate. */
 .main-tabs{display:flex;align-items:flex-end;gap:4px;margin:10px 0 0;padding:0 8px;border-bottom:1px solid var(--line);overflow-x:auto}
 .main-tabs [role=tab]{position:relative;display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 18px;border:1px solid transparent;border-bottom:0;border-radius:10px 10px 0 0;background:transparent;color:var(--muted);font:inherit;font-size:13px;font-weight:650;white-space:nowrap;cursor:pointer}
@@ -138,8 +143,13 @@ summary{cursor:pointer;font-size:12.5px}
 .main-tabs [aria-selected=true] .tab-count{background:var(--brand-2);color:var(--brand)}
 .tab-panels{min-width:0;padding-top:16px}
 .tab-panel[hidden]{display:none!important}
-.term-list-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 10px}
-.term-list-head>strong{font-size:13px}
+.term-manage{margin-bottom:18px}
+.term-list-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 12px}
+.term-list-title{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-width:0}
+.term-list-title>strong{font-size:13px}
+.term-summary{display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:var(--muted);font-size:11.5px}
+.term-summary span{white-space:nowrap;padding:3px 8px;border:1px solid var(--line);border-radius:999px;background:var(--panel-2)}
+.term-summary b{color:var(--text);font-variant-numeric:tabular-nums}
 .term-filters{display:flex;gap:6px;flex-wrap:wrap}
 .term-filters .btn{min-height:34px;padding:5px 10px;font-size:12px}
 .term-filters .btn.active{background:var(--brand-2);color:var(--brand);border-color:var(--brand)}
@@ -155,6 +165,13 @@ summary{cursor:pointer;font-size:12.5px}
  .main-tabs [role=tab]{flex:1;justify-content:center;min-height:46px;padding:0 10px}
  .tab-panels{padding-top:12px}
  .term-list{grid-template-columns:minmax(0,1fr)}
+ .term-manage{padding:10px}
+ .term-list-head{align-items:flex-start}
+ .term-list-title{width:100%;gap:7px}
+ .term-summary{gap:4px;font-size:10.5px}
+ .term-summary span{padding:2px 6px}
+ .term-filters{width:100%}
+ .term-filters .btn{flex:1 1 auto}
  .shell{padding:12px 12px calc(28px + env(safe-area-inset-bottom))}
  .hero{margin-bottom:12px}
  .topbar{gap:6px;padding:8px}
@@ -162,6 +179,9 @@ summary{cursor:pointer;font-size:12.5px}
  .topbar>.spacer{display:none}
  .topbar>.btn,.topbar>.icon-btn{flex:1 1 auto;justify-content:center}
  .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+ .worker-status-board{padding:10px}
+ .worker-status-board .worker-overview{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .worker-status-board .worker-details{grid-template-columns:repeat(2,minmax(0,1fr))}
  .card{padding:10px;min-width:0}
  .card strong{font-size:clamp(14px,4vw,18px);overflow-wrap:anywhere}
  .section-head{gap:6px;flex-wrap:wrap}
@@ -182,6 +202,9 @@ summary{cursor:pointer;font-size:12.5px}
 @media(max-width:380px){
  .shell{padding-left:8px;padding-right:8px}
  .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+ .worker-status-board{padding:8px}
+ .worker-status-board .worker-overview,.worker-status-board .worker-details{grid-template-columns:minmax(0,1fr)}
+ .worker-status-board .worker-details .wide{grid-column:auto}
  .metric{padding:9px 8px}
  .metric strong{font-size:13px;overflow-wrap:anywhere}
  .metric small,.metric .label{font-size:10.5px}
@@ -191,6 +214,13 @@ summary{cursor:pointer;font-size:12.5px}
  .readback{grid-template-columns:minmax(0,1fr)}
  .readback .wide{grid-column:auto}
  .section-head h2{font-size:15px}
+ .term-manage{padding:8px}
+ .term-list-head{gap:7px}
+ .term-list-title{align-items:flex-start;flex-direction:column}
+ .term-summary{width:100%;justify-content:flex-start}
+ .term-summary span{white-space:normal}
+ .term-filters{gap:4px}
+ .term-filters .btn{padding:5px 6px;font-size:11px}
 }
 /* ---------- login page ---------- */
 .login-page[hidden]{display:none!important}
@@ -236,14 +266,23 @@ summary{cursor:pointer;font-size:12.5px}
   <div class="tab-panels">
   <section class="tab-panel" id="workerTabPanel" role="tabpanel" aria-labelledby="workerTab">
   <section id="workerKeepaliveGroup">
-  <div class="section-head"><h2>Worker 保活</h2><span>定时代理、上游探测及 Cloudflare KV 状态</span></div>
-  <div class="grid worker-overview">
-    <article class="card metric"><small>MonkeyCode Cookie</small><strong id="credential">读取中</strong><span id="credentialSub" class="label">—</span></article>
-    <article class="card metric"><small>接入状态</small><strong id="ready">读取中</strong><span id="readySub" class="label">—</span></article>
-    <article class="card metric"><small>Worker / KV</small><strong id="worker">—</strong><span id="workerSub" class="label">—</span></article>
-    <article class="card metric"><small>MonkeyCode 上游</small><strong id="upstream">—</strong><span id="upstreamSub" class="label">—</span></article>
-    <article class="card metric"><small>协议保活</small><strong id="keepalive">—</strong><span id="keepaliveSub" class="label">—</span></article>
-  </div>
+  <div class="section-head"><h2>Worker 状态总览</h2><span>定时代理、上游探测及 Cloudflare KV 状态</span></div>
+  <section class="card worker-status-board">
+    <div class="grid worker-overview">
+      <article class="card metric"><small>MonkeyCode Cookie</small><strong id="credential">读取中</strong><span id="credentialSub" class="label">—</span></article>
+      <article class="card metric"><small>接入状态</small><strong id="ready">读取中</strong><span id="readySub" class="label">—</span></article>
+      <article class="card metric"><small>Worker / KV</small><strong id="worker">—</strong><span id="workerSub" class="label">—</span></article>
+      <article class="card metric"><small>MonkeyCode 上游</small><strong id="upstream">—</strong><span id="upstreamSub" class="label">—</span></article>
+      <article class="card metric"><small>协议保活</small><strong id="keepalive">—</strong><span id="keepaliveSub" class="label">—</span></article>
+    </div>
+    <div class="readback worker-details">
+      <div><small>Worker 时间</small><strong id="rb-time">—</strong></div><div><small>凭据更新时间</small><strong id="rb-credential-at">—</strong></div>
+      <div><small>Worker Cookie 有效期</small><strong id="credentialExpiryState">读取中</strong></div>
+      <div><small>保活结果</small><strong id="rb-status">—</strong></div><div><small>上次保活</small><strong id="rb-last">—</strong></div>
+      <div><small>下次计划</small><strong id="rb-next">—</strong></div><div class="wide"><small>最新错误 / 说明</small><strong id="rb-message">—</strong></div>
+    </div>
+    <details><summary>查看原始 Worker 返回（排障用）</summary><pre id="details" class="json">等待读取…</pre></details>
+  </section>
 
   <div class="section-head"><h2>保活设置 / 详情</h2><span>Worker 定时代理保活与凭据管理</span></div>
   <section class="card" style="margin-bottom:18px">
@@ -274,36 +313,20 @@ summary{cursor:pointer;font-size:12.5px}
     </details>
   </section>
 
-  <div class="section-head"><h2>Worker 运行状态</h2><span>实时读回与运行事件</span></div>
-  <section class="two">
-    <article class="card">
-      <div class="readback">
-        <div><small>Worker 时间</small><strong id="rb-time">—</strong></div>
-        <div><small>凭据更新时间</small><strong id="rb-credential-at">—</strong></div>
-        <div><small>凭据状态</small><strong id="rb-credential-status">—</strong></div>
-        <div><small>保活结果</small><strong id="rb-status">—</strong></div>
-        <div><small>上次保活</small><strong id="rb-last">—</strong></div>
-        <div><small>下次计划</small><strong id="rb-next">—</strong></div>
-        <div class="wide"><small>最新错误 / 说明</small><strong id="rb-message">—</strong></div>
-      </div>
-      <details><summary>查看原始 Worker 返回（排障用）</summary><pre id="details" class="json">等待读取…</pre></details>
-    </article>
-    <article class="card">
-      <h3 style="margin:0 0 10px;font-size:14px">运行事件</h3>
-      <ul id="timeline" class="timeline"><li class="empty">等待读取…</li></ul>
-      <div class="toolbar" style="margin:12px 0 0">
-        <button class="btn" onclick="load(true)">↻ 刷新全部状态</button>
-        <button class="btn" onclick="probe()">测试上游连接</button>
-        <button class="btn warn" onclick="keepaliveNow()">立即保活一次</button>
-      </div>
-    </article>
+  <div class="section-head"><h2>Worker 运行事件</h2><span>操作历史及手动控制</span></div>
+  <section class="card worker-events">
+    <ul id="timeline" class="timeline"><li class="empty">等待读取…</li></ul>
+    <div class="toolbar" style="margin:12px 0 0">
+      <button class="btn" onclick="load(true)">↻ 刷新全部状态</button>
+      <button class="btn" onclick="probe()">测试上游连接</button>
+      <button class="btn warn" onclick="keepaliveNow()">立即保活一次</button>
+    </div>
   </section>
 
   <div class="section-head"><h2>VM 登录浏览器</h2><span>Cookie 过期后在此重新登录并同步</span></div>
   <section class="two">
     <article class="card">
       <div class="credential-row">
-        <span class="label" id="credentialExpiryState">Worker Cookie 有效期读取中</span>
         <button class="btn primary" onclick="resetAndOpenLoginBrowser()">重开 VM 登录浏览器</button>
         <button class="btn" onclick="syncLoginBrowser()">登录完成后同步 Worker</button>
       </div>
@@ -326,11 +349,6 @@ summary{cursor:pointer;font-size:12.5px}
   <section class="tab-panel" id="terminalTabPanel" role="tabpanel" aria-labelledby="terminalTab" hidden>
   <section id="remoteTerminalGroup">
   <div class="section-head"><h2>远程终端长连接</h2><span>每条连接独立保活，可单独管理</span></div>
-  <div class="grid status-metrics" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:14px">
-    <article class="card metric"><small>终端连接数</small><strong id="termCountTotal">—</strong><span class="label">已添加的独立连接</span></article>
-    <article class="card metric"><small>在线连接</small><strong id="termCountOnline">—</strong><span class="label">WebSocket 保持中</span></article>
-    <article class="card metric"><small>重连总计</small><strong id="termCountReconnects">—</strong><span class="label">所有连接累计自动重连</span></article>
-  </div>
   <section class="card term-add">
     <div class="config" style="grid-template-columns:1fr;gap:10px">
       <label>粘贴连接信息自动识别（终端 ID、分享密码、Cookie 或它们的组合）<textarea id="termPaste" rows="2" placeholder="例如：https://monkeycode-ai.com/share?terminal_id=xxxx&password=xxxx 或直接粘贴 Cookie / 终端 ID" autocomplete="off" style="width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 10px;outline:0;font:inherit;resize:vertical"></textarea></label>
@@ -353,8 +371,10 @@ summary{cursor:pointer;font-size:12.5px}
       每个连接由 8888 所在服务器独立持有并独立保活，互不影响；Cookie / 密码只存本机 600 权限文件，永不回显。</p>
   </section>
 
-  <div class="term-list-head"><strong>已添加的终端</strong><div class="term-filters" role="group" aria-label="筛选终端"><button class="btn active" data-term-filter="all" onclick="setTerminalFilter('all')">全部</button><button class="btn" data-term-filter="online" onclick="setTerminalFilter('online')">在线</button><button class="btn" data-term-filter="offline" onclick="setTerminalFilter('offline')">离线 / 异常</button><button class="btn" onclick="loadTerminal()">↻ 刷新</button></div></div>
-  <div id="termList" class="term-list"></div>
+  <section class="card term-manage">
+    <div class="term-list-head"><div class="term-list-title"><strong>已添加的终端</strong><div class="term-summary" aria-label="终端连接统计"><span>连接 <b id="termCountTotal">—</b></span><span>在线 <b id="termCountOnline">—</b></span><span>重连 <b id="termCountReconnects">—</b></span></div></div><div class="term-filters" role="group" aria-label="筛选终端"><button class="btn active" data-term-filter="all" onclick="setTerminalFilter('all')">全部</button><button class="btn" data-term-filter="online" onclick="setTerminalFilter('online')">在线</button><button class="btn" data-term-filter="offline" onclick="setTerminalFilter('offline')">离线 / 异常</button><button class="btn" onclick="loadTerminal()">↻ 刷新</button></div></div>
+    <div id="termList" class="term-list"></div>
+  </section>
   </section>
   </section>
   </div>
@@ -396,7 +416,7 @@ async function api(url,opt={},authToken=token.value){const c=new AbortController
 function setMetric(id,value,sub,cls=''){const e=$(id);e.textContent=value;e.className=cls;e.nextElementSibling.textContent=sub||'—'}
 function configFrom(d){const c=(d.worker||{}).config||d.config?.worker_config||{};for(const k of ['upstreamOrigin','taskId','minSeconds','maxSeconds','keepaliveMessage','proxyTimeoutMs','retryAfterSeconds'])if(c[k]!==undefined&&!dirtyFields.has(k)&&document.activeElement!==$(k))$(k).value=c[k];if(!dirtyFields.has('enabled')&&document.activeElement!==$('enabled'))$('enabled').checked=c.enabled!==false;if(d.config&&!dirtyFields.has('worker_admin_url')&&document.activeElement!==$('worker_admin_url'))$('worker_admin_url').value=d.config.worker_admin_url||'';const expiry=d.credential?.expiry||d.worker?.credentialExpiry;if(expiry){$('credentialExpiryState').textContent='Worker Cookie 剩余：'+remainingTime(Number(expiry))}else{$('credentialExpiryState').textContent='Worker Cookie 未提供固定过期时间'}}
 function remainingTime(value){const delta=value-Date.now();if(delta<=0)return '已过期';const days=Math.floor(delta/86400000),hours=Math.floor(delta/3600000)%24,minutes=Math.floor(delta/60000)%60;return `${days}天 ${hours}小时 ${minutes}分钟（至 ${fmt(value)}）`}
-function render(d){latest=d;const w=d.worker||{},up=w.upstream||{},cfg=w.config||d.config?.worker_config||{};const cs=w.credentialStatus||'unknown';const cExpired=cs==='expired_or_invalid';setMetric('credential',cExpired?'已过期/无效':(cs==='valid'?'有效':'未验证'),w.credentialMessage||'最近一次真实 Task WebSocket 保活结果',cExpired?'bad':(cs==='valid'?'good':'warn'));setMetric('ready',d.ready?'已接入':'未接入',d.message,d.ready?'good':'warn');setMetric('worker',d.ok?'运行正常':'同步异常',d.http_status?`实时 Worker API HTTP ${d.http_status}`:(w.error||'未返回实时状态'),d.ok?'good':'bad');setMetric('upstream',up.ok?'在线':(up.ok===false?'不可达':'状态未知'),up.status?`实时 HTTP ${up.status} · ${up.latencyMs||0} ms`:(up.error||'未返回实时探测'),up.ok?'good':'bad');const enabled=cfg.enabled===true;setMetric('keepalive',cfg.enabled===undefined?'状态未知':(enabled?'已启用':'已暂停'),cfg.enabled===undefined?'Worker 未返回实时保活配置':`上次：${fmt(w.lastKeepaliveAt)} · 下次：${fmt(w.nextKeepaliveAt)}`,cfg.enabled===undefined?'bad':(enabled?'good':'warn'));configFrom(d);$('rb-time').textContent=w.workerTime?new Date(w.workerTime).toLocaleString('zh-CN',{hour12:false}):'—';$('rb-credential-at').textContent=fmt(w.credentialCheckedAt||w.credentialUpdatedAt);$('rb-credential-at').title=w.credentialExpiredAt?'判定失效时间：'+fmt(w.credentialExpiredAt):'MonkeyCode 未返回固定过期时间';$('rb-credential-status').textContent=cExpired?'过期/无效':(cs==='valid'?'有效':'未验证');$('rb-credential-status').className=cExpired?'bad':(cs==='valid'?'good':'warn');const statusText={confirmed:'已确认',sent:'已发送',failed:'失败',skipped:'已跳过'};$('rb-status').textContent=statusText[w.lastStatus]||w.lastStatus||'未执行';$('rb-status').className=w.lastStatus==='confirmed'||w.lastStatus==='sent'?'good':(w.lastStatus==='failed'?'bad':'');$('rb-last').textContent=fmt(w.lastKeepaliveAt);$('rb-next').textContent=fmt(w.nextKeepaliveAt);$('rb-message').textContent=w.lastMessage||'最近没有 Worker 错误';$('details').textContent=JSON.stringify({workerTime:w.workerTime,upstream:up,lastKeepaliveAt:w.lastKeepaliveAt,nextKeepaliveAt:w.nextKeepaliveAt,lastStatus:w.lastStatus,lastMessage:w.lastMessage,credentialCheckedAt:w.credentialCheckedAt||w.credentialUpdatedAt,credentialExpiredAt:w.credentialExpiredAt,credentialStatus:cs,credentialMessage:w.credentialMessage,config:cfg},null,2);const h=d.history||[];$('timeline').innerHTML=h.length?h.map(x=>`<li><time>${fmt(x.at)} · ${x.kind}</time><span class="${x.ok?'pass':'fail'}">${x.ok?'● 成功':'● 失败'} · ${esc(x.message)}</span></li>`).join(''):'<li class="empty">尚无本机操作记录；首次“测试连接”或“写入 Worker”后会显示。</li>'}
+function render(d){latest=d;const w=d.worker||{},up=w.upstream||{},cfg=w.config||d.config?.worker_config||{};const cs=w.credentialStatus||'unknown';const cExpired=cs==='expired_or_invalid';setMetric('credential',cExpired?'已过期/无效':(cs==='valid'?'有效':'未验证'),w.credentialMessage||'最近一次真实 Task WebSocket 保活结果',cExpired?'bad':(cs==='valid'?'good':'warn'));setMetric('ready',d.ready?'已接入':'未接入',d.message,d.ready?'good':'warn');setMetric('worker',d.ok?'运行正常':'同步异常',d.http_status?`实时 Worker API HTTP ${d.http_status}`:(w.error||'未返回实时状态'),d.ok?'good':'bad');setMetric('upstream',up.ok?'在线':(up.ok===false?'不可达':'状态未知'),up.status?`实时 HTTP ${up.status} · ${up.latencyMs||0} ms`:(up.error||'未返回实时探测'),up.ok?'good':'bad');const enabled=cfg.enabled===true;setMetric('keepalive',cfg.enabled===undefined?'状态未知':(enabled?'已启用':'已暂停'),cfg.enabled===undefined?'Worker 未返回实时保活配置':(enabled?'自动保活已开启':'自动保活已暂停'),cfg.enabled===undefined?'bad':(enabled?'good':'warn'));configFrom(d);$('rb-time').textContent=w.workerTime?new Date(w.workerTime).toLocaleString('zh-CN',{hour12:false}):'—';$('rb-credential-at').textContent=fmt(w.credentialCheckedAt||w.credentialUpdatedAt);$('rb-credential-at').title=w.credentialExpiredAt?'判定失效时间：'+fmt(w.credentialExpiredAt):'MonkeyCode 未返回固定过期时间';const statusText={confirmed:'已确认',sent:'已发送',failed:'失败',skipped:'已跳过'};$('rb-status').textContent=statusText[w.lastStatus]||w.lastStatus||'未执行';$('rb-status').className=w.lastStatus==='confirmed'||w.lastStatus==='sent'?'good':(w.lastStatus==='failed'?'bad':'');$('rb-last').textContent=fmt(w.lastKeepaliveAt);$('rb-next').textContent=fmt(w.nextKeepaliveAt);$('rb-message').textContent=w.lastMessage||'最近没有 Worker 错误';$('details').textContent=JSON.stringify({workerTime:w.workerTime,upstream:up,lastKeepaliveAt:w.lastKeepaliveAt,nextKeepaliveAt:w.nextKeepaliveAt,lastStatus:w.lastStatus,lastMessage:w.lastMessage,credentialCheckedAt:w.credentialCheckedAt||w.credentialUpdatedAt,credentialExpiredAt:w.credentialExpiredAt,credentialStatus:cs,credentialMessage:w.credentialMessage,config:cfg},null,2);const h=d.history||[];$('timeline').innerHTML=h.length?h.map(x=>`<li><time>${fmt(x.at)} · ${x.kind}</time><span class="${x.ok?'pass':'fail'}">${x.ok?'● 成功':'● 失败'} · ${esc(x.message)}</span></li>`).join(''):'<li class="empty">尚无本机操作记录；首次“测试连接”或“写入 Worker”后会显示。</li>'}
 function esc(v){const d=document.createElement('div');d.textContent=v||'';return d.innerHTML}
 async function load(manual=false){if(loading)return;loading=true;if(manual)say('正在实时同步 Worker 状态…');try{render(await api('/api/guardian/status'))}catch(e){if(e.name!=='AbortError')say('读取失败：'+e.message,true)}finally{loading=false}}
 let messageSaveTimer=0;function scheduleMessageSave(){clearTimeout(messageSaveTimer);$('messageSaveState').textContent='等待保存…';messageSaveTimer=setTimeout(async()=>{try{await saveSetup();$('messageSaveState').textContent='已保存到本机；点击“写入 Worker”后生效';if($('keepaliveMessage').value===input().worker_config.keepaliveMessage)dirtyFields.delete('keepaliveMessage');load(true)}catch(e){$('messageSaveState').textContent='保存失败：'+e.message}},500)}
@@ -412,7 +432,7 @@ async function quickSetup(){const d=$('quickDomain').value.trim();if(!d)return s
 async function keepaliveNow(){try{const r=await api('/api/guardian/keepalive',{method:'POST'});await watchAction(r.action,'立即保活')}catch(e){say('保活提交失败：'+e.message,true)}}
 /* ---------- remote terminal long links (independent, multi-account) ---------- */
 const TERM_STATUS={connected:'已连接',reconnecting:'重连中',error:'连接异常',disconnected:'未连接'};
-function fmtDur(sec){const n=Number(sec||0);if(!n)return '—';const d=Math.floor(n/86400),h=Math.floor(n/3600)%24,m=Math.floor(n/60)%60,s=n%60;return (d?d+'天 ':'')+(h?String(h).padStart(2,'0')+':':'00:')+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')}
+function fmtDur(sec){if(sec===null||sec===undefined||sec==='')return '—';const n=Math.max(0,Math.floor(Number(sec)||0)),d=Math.floor(n/86400),h=Math.floor(n/3600)%24,m=Math.floor(n/60)%60,s=n%60;return (d?d+'天 ':'')+String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')}
 function termCard(l){
   const st=l.state||{};const status=TERM_STATUS[st.status]||st.status||'未连接';
   const mode=st.mode==='owner'?'同账号 Cookie 通道':(st.mode==='share'?'跨账号分享密码':'—');
@@ -434,7 +454,7 @@ function termCard(l){
     <div class="readback" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-top:10px">
       <div><small>连接状态</small><strong class="${cls}">${status}</strong></div>
       <div><small>连接通道</small><strong>${mode}</strong></div>
-      <div><small>已连接时长</small><strong>${fmtDur(l.uptime_seconds)}</strong></div>
+      <div><small>已连接时长</small><strong class="term-uptime" data-uptime-seconds="${st.status==='connected'&&l.uptime_seconds!=null?Math.max(0,Number(l.uptime_seconds)||0):''}" data-updated-at="${st.status==='connected'?Date.now():''}">${st.status==='connected'?fmtDur(l.uptime_seconds??0):'—'}</strong></div>
       <div><small>自动重连次数</small><strong>${st.reconnects||0}</strong></div>
       <div class="wide" style="grid-column:1/-1"><small>最近说明</small><strong>${err||'—'}</strong></div>
     </div>
@@ -458,7 +478,9 @@ function renderTerminal(t){
   const links=terminalFilter==='online'?t.links.filter(l=>l.state?.status==='connected'):terminalFilter==='offline'?t.links.filter(l=>l.state?.status!=='connected'):t.links;
   if(!links.length){list.innerHTML=`<article class="card"><p class="empty">${terminalFilter==='online'?'当前没有在线连接。':'没有符合筛选条件的连接。'}</p></article>`;return}
   list.innerHTML=links.map(termCard).join('');
+  updateTerminalUptimes();
 }
+function updateTerminalUptimes(){const now=Date.now();document.querySelectorAll('.term-uptime[data-updated-at]').forEach(el=>{if(!el.dataset.updatedAt||!el.dataset.uptimeSeconds)return;const base=Number(el.dataset.uptimeSeconds),updated=Number(el.dataset.updatedAt);if(Number.isFinite(base)&&Number.isFinite(updated))el.textContent=fmtDur(base+Math.floor((now-updated)/1000))})}
 async function loadTerminal(){try{renderTerminal(await api('/api/terminal/status'))}catch(e){if(e.name!=='AbortError')console.warn('terminal status failed',e)}}
 function termBody(){return {paste:$('termPaste').value,label:$('termLabel').value,terminal_id:$('termTerminalId').value,password:$('termPassword').value,cookie:$('termCookie').value,envid:$('termEnvid').value,title:window.__termTitle||'',id:$('termEditId').value}}
 function terminalClearForm(){for(const id of ['termPaste','termLabel','termTerminalId','termPassword','termCookie','termEnvid','termEditId'])$(id).value='';window.__termTitle='';$('termFields').style.display='none';$('termCancelEditBtn').hidden=true;$('termDiscoverBtn').textContent='识别并连接';$('termDiscoverNote').textContent=''}
@@ -495,6 +517,7 @@ async function terminalReconnect(id){try{const on=await api('/api/terminal/setup
 async function terminalDelete(id){if(!confirm('删除该终端连接？保存的凭据会一并移除。'))return;try{await api('/api/terminal/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});say('终端连接已删除');await loadTerminal()}catch(e){say('删除失败：'+e.message,true)}}
 if(token.value){load();loadTerminal();}
 setInterval(()=>{if(document.hidden||!requireLogin())return;load();loadTerminal()},12000);
+setInterval(()=>{if(!document.hidden)updateTerminalUptimes()},1000);
 function requireLogin(){if(token.value.trim())return true;showLogin();return false}
 addEventListener('visibilitychange',()=>{document.hidden||requireLogin()&&load()});
 </script>
