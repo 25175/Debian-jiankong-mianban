@@ -169,8 +169,23 @@ summary{cursor:pointer;font-size:12.5px}
 .term-history-row span{display:block;color:var(--muted);overflow-wrap:anywhere}
 .term-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
 .term-card{padding:12px}
-.term-card-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
-.term-card-actions .btn{min-height:36px;padding:6px 10px}
+.term-card-actions{display:flex;flex-flow:row nowrap;align-items:center;gap:7px;justify-content:flex-end;flex:0 0 auto}
+.term-card-actions .btn{min-height:36px;padding:6px 12px;white-space:nowrap}
+.term-card-top{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0}
+.term-card-identity{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.term-card-identity b{font-size:13px}
+.term-card-identity .term-id{color:var(--muted);font-size:10.5px;font-family:ui-monospace,monospace;overflow-wrap:anywhere}
+.term-card .readback{margin-top:10px!important}
+@media(max-width:520px){
+ .term-card{padding:10px}
+ .term-card-top{align-items:flex-start;flex-direction:column;gap:9px}
+ .term-card-actions{width:100%;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
+ .term-card-actions .btn{min-width:0;width:100%;min-height:38px;padding:5px 4px;font-size:11px}
+}
+@media(max-width:360px){
+ .term-card-actions{gap:4px}
+ .term-card-actions .btn{font-size:10.5px;padding:4px 2px}
+}
 .term-card .readback{grid-template-columns:repeat(2,minmax(0,1fr))!important}
 .term-card .readback .wide{grid-column:1/-1}
 .term-add{margin-bottom:12px}
@@ -463,8 +478,8 @@ function termCard(l){
   const cls=st.status==='connected'?'good':(st.status==='reconnecting'?'warn':(st.status==='error'?'bad':''));
   const err=st.last_error?(' · '+esc(st.last_error)):(l.stale?' · 心跳超时':'');
   return `<article class="card term-card ${cls?'':' '}" style="${cls?'border-left:3px solid var(--'+cls+')':''}">
-    <div class="credential-row" style="align-items:flex-start">
-      <span class="label" style="min-width:0"><b style="color:var(--text)">${label}</b>${title?`<span style="font-size:11px;color:var(--muted)"> · ${esc(title)}</span>`:''}<br><span style="font-size:11px;color:var(--muted);font-family:ui-monospace,monospace">${esc(tid)}</span></span>
+    <div class="term-card-top">
+      <span class="term-card-identity"><b style="color:var(--text)">${label}</b>${title?`<span style="font-size:11px;color:var(--muted)"> · ${esc(title)}</span>`:''}<br><span class="term-id">${esc(tid)}</span></span>
       <span class="term-card-actions">
         <button class="btn" onclick="terminalToggle('${l.id}',${l.enabled?'false':'true'})">${l.enabled?'断开':'连接'}</button>
         ${l.enabled?`<button class="btn" onclick="terminalReconnect('${l.id}')">重连</button>`:''}
