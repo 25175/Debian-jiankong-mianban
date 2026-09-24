@@ -285,12 +285,11 @@ let data=null;
 /* ---------- login gate ---------- */
 const loginPage=document.querySelector('#loginPage'),appMain=document.querySelector('#appMain'),loginForm=document.querySelector('#loginForm'),loginPassword=document.querySelector('#loginPassword'),loginError=document.querySelector('#loginError');
 function showApp(){loginPage.hidden=true;appMain.hidden=false;load();loadResources()}
-function showLogin(){const h=loginPage.hidden;loginPage.hidden=false;appMain.hidden=true;if(h){loginPassword.value='';loginPassword.focus()}}
-function logout(){localStorage.removeItem(TOKEN_KEY);token.value='';showLogin()}
-loginForm.addEventListener('submit',e=>{e.preventDefault();const v=loginPassword.value.trim();if(!v){loginError.textContent='请输入登录密码';return}
-  token.value=v;localStorage.setItem(TOKEN_KEY,v);
-  // verify against the server before switching screens
-  api('/api/status').then(()=>{loginError.textContent='';showApp()}).catch(err=>{localStorage.removeItem(TOKEN_KEY);token.value='';loginError.textContent='登录失败：'+(err.message||'密码错误')})});
+function showLogin(){const wasHidden=loginPage.hidden;loginPage.hidden=false;appMain.hidden=true;if(wasHidden){loginError.textContent='';loginPassword.focus()}}
+function logout(){localStorage.removeItem(TOKEN_KEY);token.value='';loginPassword.value='';showLogin()}
+let loginAttempt=0;
+loginForm.addEventListener('submit',async e=>{e.preventDefault();const v=loginPassword.value;if(!v){loginError.textContent='请输入登录密码';return}const attempt=++loginAttempt;const submit=loginForm.querySelector('[type="submit"]');if(submit)submit.disabled=true;loginError.textContent='正在验证…';try{await api('/api/status',{},v);if(attempt!==loginAttempt)return;token.value=v;localStorage.setItem(TOKEN_KEY,v);loginError.textContent='';loginPassword.value='';showApp()}catch(err){if(attempt===loginAttempt)loginError.textContent='登录失败：'+(err.message||'验证未成功')}finally{if(attempt===loginAttempt&&submit)submit.disabled=false}});
+addEventListener('storage',e=>{if(e.key!==TOKEN_KEY)return;token.value=e.newValue||'';if(token.value)showApp();else showLogin()});
 if(token.value)showApp();else showLogin();
 
 /* ---------- theme: auto / light / dark ---------- */
@@ -310,7 +309,7 @@ matchMedia('(prefers-color-scheme:dark)').addEventListener('change',()=>{if((loc
 
 function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML}
 function say(s){notice.textContent=s;clearTimeout(window.nt);window.nt=setTimeout(()=>notice.textContent='',4200)}
-async function api(path,opt={}){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),path.includes('plugins/toggle')&&opt.method==='POST'?900000:8000);try{opt.headers={...(opt.headers||{}),'X-Jiankong-Token':token.value};opt.signal=controller.signal;const r=await fetch(path,opt),t=await r.text();let d;try{d=JSON.parse(t)}catch(e){throw Error('服务返回了非 JSON 内容（可能是网关超时页）：'+t.slice(0,80))}if(!r.ok)throw Error(d.error||'请求失败');return d}finally{clearTimeout(timer)}}
+async function api(path,opt={},authToken=token.value){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),path.includes('plugins/toggle')&&opt.method==='POST'?900000:8000);try{opt.headers={...(opt.headers||{}),'X-Jiankong-Token':authToken};opt.signal=controller.signal;const r=await fetch(path,opt),t=await r.text();let d=null;try{d=t?JSON.parse(t):{}}catch(e){const detail=t.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim().slice(0,300);d={error:detail||'服务返回了无法解析的响应（可能是网关错误页）'}}if(!r.ok){const err=new Error((d&&d.error)||`HTTP ${r.status} 请求失败`);err.status=r.status;if(r.status===401&&authToken===token.value&&token.value){localStorage.removeItem(TOKEN_KEY);token.value='';showLogin();loginError.textContent='登录状态已失效：'+err.message}throw err}return d}finally{clearTimeout(timer)}}
 function requireToken(){if(token.value.trim())return true;showLogin();return false}
 function openModal(t,x){modalTitle.textContent=t;modalText.textContent=x;logBox.hidden=true;logBox.className='';confirmBtn.hidden=true;confirmBtn.disabled=false;confirmBtn.textContent='确认操作';confirmBtn.onclick=null;closeModalBtn.textContent='关闭';modal.classList.add('show')}
 function closeModal(){modal.classList.remove('show');confirmBtn.onclick=null;confirmBtn.disabled=false}

@@ -52,11 +52,10 @@ http://<服务器地址>:8888/guardian/
 
 新 MonkeyCode 实例的接入步骤：
 
-1. 在新实例部署本项目并打开 `/guardian/`；
-2. 输入该实例的 `control-token`；
-3. 填写现有 Cloudflare Worker 的 `/cf-admin/` 地址及其管理密码、该实例的 `8787` 预览上游和 Task ID；
-4. 点击“保存接入信息”，再点击“写入 Worker，立即生效”；
-5. 页面自动读回 Worker / KV / 上游状态。Worker 的 Cron 保持 780–840 秒随机间隔，即 13–14 分钟。
+1. 在新实例部署本项目并打开 `/guardian/`，输入该实例的 `control-token`；
+2. 可在“一键接入”填写 work 域名与管理密码。系统仅在能够从 VM 环境可靠推导 `8787` 上游和 Task ID 时保存并写入 KV；推导不完整时会拒绝保存，提示使用高级设置；
+3. 或在“高级设置”手动填写 Worker 管理地址、该实例的 `8787` 预览上游和 Task ID；点击“保存接入信息”只保存本机配置，确认后再点“写入 Worker，立即生效”；
+4. 页面自动读回 Worker / KV / 上游状态。Worker 的 Cron 保持 780–840 秒随机间隔，即 13–14 分钟。
 
 注意：Worker Cron 是唯一不依赖 MonkeyCode 运行状态的保活执行者。部署在 MonkeyCode 的 jiankong 是管理与观察面；如果该实例休眠，Worker 仍会继续执行已写入 KV 的保活计划。Cookie 被服务端吊销或到期时，页面会基于真实 Task WebSocket 的 401/403 结果标记“过期/无效”，上游 521/502/503 只显示为上游不可达，不会误报 Cookie 过期。
 

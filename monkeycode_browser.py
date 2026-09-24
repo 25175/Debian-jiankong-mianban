@@ -17,7 +17,11 @@ import typing
 import urllib.request
 from pathlib import Path
 
-import websocket
+try:
+    import websocket
+except ImportError:
+    # Keep install/status commands usable on fresh VMs before runtime setup.
+    websocket = None
 
 BASE = Path(__file__).resolve().parent
 DATA = BASE / "data" / "monkeycode-login-browser"
@@ -78,7 +82,7 @@ def install_dependencies() -> dict:
     # Debian packages give a compatible Chromium/Xvfb/noVNC stack. No external
     # download mirror is used, so it works through the VM's normal domestic or
     # international apt mirror configuration.
-    packages = ["chromium", "xvfb", "fluxbox", "x11vnc", "novnc", "websockify", "fonts-noto-cjk"]
+    packages = ["chromium", "xvfb", "fluxbox", "x11vnc", "novnc", "websockify", "fonts-noto-cjk", "python3-websocket"]
     env = os.environ.copy()
     env["DEBIAN_FRONTEND"] = "noninteractive"
     proc = subprocess.run([apt, "update"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=300)
@@ -87,11 +91,8 @@ def install_dependencies() -> dict:
     proc = subprocess.run([apt, "install", "-y", "--no-install-recommends", *packages], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=900)
     if proc.returncode:
         raise RuntimeError("安装 VM 登录浏览器组件失败：" + proc.stdout[-1200:])
-    # monkeycode_browser.py needs websocket-client to talk to Chromium DevTools;
-    # it is a pure-python wheel and is not in the apt set above.
-    proc = subprocess.run([sys.executable, "-m", "pip", "install", "websocket-client"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=300)
-    if proc.returncode:
-        raise RuntimeError("安装 websocket-client 失败：" + proc.stdout[-800:])
+    # python3-websocket provides websocket-client without assuming pip or
+    # ensurepip exists in the VM's Python installation.
     missing = missing_dependencies()
     if missing:
         raise RuntimeError("安装完成但仍缺少组件：" + ", ".join(missing))

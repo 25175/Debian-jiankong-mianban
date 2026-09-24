@@ -312,52 +312,48 @@ def _share_mint(cookie: str, envid: str, terminal_id: str) -> str | None:
 
 
 def _parse_paste(raw: str) -> dict:
-    """Split one pasted blob into the fields it actually contains.
-
-    A paste can be a share URL (terminal id + password), a bare terminal id, a
-    session cookie, or several of those mixed with labels. Nothing is required:
-    whatever is absent stays empty and the caller decides if it is enough.
-    """
+    """Extract terminal credentials from URLs, cookie headers, or mixed text."""
     text = " ".join((raw or "").split())
     found: dict = {"label": "", "envid": "", "terminal_id": "", "cookie": "", "password": ""}
     if not text:
         return found
-    # Strip a wrapped URL form first: https://.../join?terminal_id=x&password=y
-    for sep in (" ", "\n"):
-        text = text.replace(sep, "\n")
-    lines = [x.strip() for x in text.splitlines() if x.strip()]
-    combined = "\n".join(lines)
-    # sharedterminal invitations put the id in the query string, not a join path.
-    url_match = re.search(
-        r"(?:https?://[^\s?]*)?/[a-z_]*terminal[a-z_]*(?:[/?]|$|\?)[^ ]*?terminal_id=([0-9a-f-]{36})",
-        combined, re.I)
-    if not url_match:
-        url_match = re.search(r"terminal_id=([0-9a-f-]{36})", combined, re.I)
-    if url_match:
-        found["terminal_id"] = url_match.group(1)
-    pw_match = re.search(r"(?:密码|password)\s*[:：]?\s*([0-9a-f]{6,12})", combined, re.I)
-    if not pw_match:
-        pw_match = re.search(r"password=([0-9a-f]{6,12})", combined, re.I)
-    if pw_match:
-        found["password"] = pw_match.group(1)
-    env_match = re.search(r"\b(agent_[0-9a-f-]{36})\b", combined)
+    # Parse complete URLs first so percent-encoded values and arbitrary password
+    # formats are decoded exactly once by urllib.
+    for candidate in re.findall(r"https?://[^\s<>\"]+", text, re.I):
+        candidate = candidate.rstrip(").,;]")
+        try:
+            query = parse_qs(urlsplit(candidate).query, keep_blank_values=True)
+        except ValueError:
+            continue
+        for key in ("terminal_id", "terminalId"):
+            if query.get(key) and not found["terminal_id"]:
+                found["terminal_id"] = query[key][0].strip()
+        if query.get("password") and not found["password"]:
+            found["password"] = query["password"][0]
+    tid_match = re.search(r"\bterminal_id\s*[:=：]\s*([0-9a-f-]{36})", text, re.I)
+    if tid_match and not found["terminal_id"]:
+        found["terminal_id"] = tid_match.group(1)
+    if not found["terminal_id"]:
+        uuid = re.search(r"\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b", text, re.I)
+        if uuid:
+            found["terminal_id"] = uuid.group(1)
+    if not found["password"]:
+        pw = re.search(r"(?:密码|password)\s*[:=：]?\s*([^\s&;,]+)", text, re.I)
+        if pw:
+            from urllib.parse import unquote
+            found["password"] = unquote(pw.group(1))
+    env_match = re.search(r"\b(agent_[0-9a-f-]{36})\b", text, re.I)
     if env_match:
         found["envid"] = env_match.group(1)
-    # A leading short token without separators is a label the user typed.
-    first = lines[0] if lines else ""
-    if first and not re.search(r"[=:?]", first) and len(first) <= 30:
-        found["label"] = first
-    cookie_match = re.search(r"(monkeycode_ai_session=[A-Za-z0-9_.-]+)", combined)
+    cookie_match = re.search(r"(?:^|[;\s])monkeycode_ai_session=([^;\s]+)", text, re.I)
     if cookie_match:
-        found["cookie"] = cookie_match.group(1)
-    elif not found["terminal_id"] and not found["envid"]:
-        # A lone uuid that is neither a terminal id (matched above from the URL
-        # form) nor an envid. If the url_match captured one, this branch is
-        # unreachable; otherwise the uuid still has to be assigned, and the only
-        # remaining meaning is a pasted session value.
-        session = re.search(r"\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b", combined)
-        if session:
-            found["terminal_id"] = session.group(1)
+        found["cookie"] = "monkeycode_ai_session=" + cookie_match.group(1)
+    elif not found["terminal_id"] and not found["envid"] and not found["password"] and not text.lower().startswith(("http://", "https://")):
+        # A bare session token may itself contain URL-safe/base64 '=' chars.
+        found["cookie"] = text
+    lines = [x.strip() for x in text.splitlines() if x.strip()]
+    if lines and len(lines[0]) <= 30 and not re.search(r"[=:?]", lines[0]):
+        found["label"] = lines[0]
     return found
 
 
@@ -388,7 +384,9 @@ def terminal_list_api(cookie: str, envid: str) -> tuple[int, list]:
 
 
 def _link_mode(entry: dict) -> str:
-    """Channel decision: owner (cookie) wins, share (password) otherwise."""
+    """Use the explicit channel when present; legacy entries infer by credentials."""
+    if entry.get("mode") in ("owner", "share"):
+        return str(entry["mode"])
     if str(entry.get("cookie") or "") and str(entry.get("envid") or ""):
         return "owner"
     return "share"
@@ -466,6 +464,15 @@ class TerminalLink:
         with self._lock:
             self._state.update(patch)
 
+    def _safe_error(self, exc: Exception) -> str:
+        message = str(exc)
+        for secret in (str(self.entry.get("password") or ""), str(self.entry.get("cookie") or "")):
+            if secret:
+                message = message.replace(secret, "[REDACTED]")
+        message = re.sub(r"(password=)[^&\s]+", r"\1[REDACTED]", message, flags=re.I)
+        message = re.sub(r"monkeycode_ai_session=[^;\s]+", "monkeycode_ai_session=[REDACTED]", message, flags=re.I)
+        return f"{type(exc).__name__}: {message[:160]}"
+
     def _connect(self) -> None:
         self._ws = websocket.create_connection(_ws_url(self.entry), timeout=20, header=_terminal_headers(self.entry))
 
@@ -475,10 +482,18 @@ class TerminalLink:
         self._stop.clear()
         try:
             self._connect()
+            if self._ws is None or _frame_kind(self._ws.recv()) != "connected":
+                raise RuntimeError("未收到平台的连接确认帧")
         except Exception as exc:  # noqa: BLE001 - report every handshake failure
-            self._set(status="error", last_error=f"{type(exc).__name__}: {str(exc)[:160]}", connected_since=None)
+            ws, self._ws = self._ws, None
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+            self._set(status="error", last_error=self._safe_error(exc), connected_since=None)
             return False
-        mode = "owner" if str(self.entry.get("cookie") or "") else "share"
+        mode = _link_mode(self.entry)
         self._set(status="connected", mode=mode, connected_since=time.time(), last_pong=time.time(), last_error="")
         return True
 
@@ -514,7 +529,7 @@ class TerminalLink:
                 # link's own cookie/password may still be valid, so re-establish
                 # it instead of waiting for a human. Share passwords rotate, so
                 # a refreshable owner cookie can mint a fresh one transparently.
-                self._set(status="reconnecting", last_error=f"{type(exc).__name__}: {str(exc)[:160]}")
+                self._set(status="reconnecting", last_error=self._safe_error(exc))
                 self._refresh_share_password()
                 try:
                     self._connect()
@@ -527,7 +542,7 @@ class TerminalLink:
                     self._set(status="connected", connected_since=time.time(), last_pong=time.time(), reconnects=reconnects, last_error="")
                     backoff = 5
                 except Exception as inner:  # noqa: BLE001 - keep retrying on the next tick
-                    self._set(status="error", last_error=f"重连失败：{type(inner).__name__}: {str(inner)[:160]}")
+                    self._set(status="error", last_error="重连失败：" + self._safe_error(inner))
                     time.sleep(backoff)
                     backoff = min(backoff * 2, 60)
             time.sleep(10)
@@ -611,6 +626,7 @@ def terminal_apply(body: dict) -> dict:
         "terminal_id": terminal_id,
         "cookie": cookie,
         "password": password,
+        "mode": "share" if password else "owner",
         "enabled": True,
     }
     if not entry["terminal_id"]:
@@ -620,9 +636,13 @@ def terminal_apply(body: dict) -> dict:
     if not has_owner and not has_share:
         raise ValueError("同账号连接需提供 Cookie；跨账号连接需提供分享密码，二者至少有一个")
     if not has_owner:
-        # A share link must never carry another account's cookie forward.
+        # A share link without owner credentials must never inherit another
+        # account's cookie. If owner credentials are supplied, retain them only
+        # as a private credential source for minting a fresh share password.
         entry["envid"] = ""
         entry["cookie"] = ""
+    elif not has_share:
+        entry["mode"] = "owner"
     _terminal_put_link(entry)
     return _terminal_start_link(entry)
 
@@ -686,50 +706,29 @@ def terminal_status() -> dict:
     }
 
 
-def terminal_resolve_envid(cookie: str) -> str:
-    """Find the envid whose terminals this cookie can list.
-
-    The terminal API path needs an envid, but the user only ever holds the
-    cookie. /api/v1/users/hosts is the account-level index and names every VM
-    this cookie may touch, so it is the source of truth for one-click setup.
-    """
-    request = Request(
-        f"{TERMINAL_BASE}/api/v1/users/hosts",
-        headers={"Cookie": cookie, "User-Agent": "jiankong/1.0"},
-    )
+def terminal_resolve_envids(cookie: str) -> list[str]:
+    """Return account VM IDs, preferring the local VM without hiding others."""
+    request = Request(f"{TERMINAL_BASE}/api/v1/users/hosts", headers={"Cookie": cookie, "User-Agent": "jiankong/1.0"})
     try:
         with build_opener(ProxyHandler({})).open(request, timeout=10) as response:
             payload = json.loads(response.read().decode("utf-8", "replace"))
     except (OSError, ValueError, json.JSONDecodeError, HTTPError):
-        return ""
+        return []
     data = payload.get("data") if isinstance(payload, dict) else payload
-    # The account index is hosts[].virtualmachines[]; the VM "id" is the envid
-    # and "hostname" carries the task uuid, which is also this VM's hostname.
     hosts = data.get("hosts") if isinstance(data, dict) else []
-    if not isinstance(hosts, list):
-        hosts = []
-    items: list = []
-    for host in hosts:
-        if isinstance(host, dict):
-            vms = host.get("virtualmachines") or []
-            if isinstance(vms, list):
-                items.extend(vms)
-    hostname = ""
+    items = [vm for host in hosts if isinstance(host, dict) for vm in (host.get("virtualmachines") or []) if isinstance(vm, dict)] if isinstance(hosts, list) else []
+    ids = list(dict.fromkeys(str(vm.get("id") or "") for vm in items if vm.get("id")))
     try:
-        hostname = socket.gethostname()
+        local = socket.gethostname()
     except OSError:
-        pass
-    # Prefer this machine's own VM: that is the MonkeyCode self-connection.
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        vm_host = str(item.get("hostname") or "")
-        if vm_host and hostname and vm_host == hostname:
-            return str(item.get("id") or "")
-    for item in items:
-        if isinstance(item, dict) and str(item.get("id") or "").startswith("agent_"):
-            return str(item["id"])
-    return ""
+        local = ""
+    preferred = [str(vm.get("id")) for vm in items if local and vm.get("hostname") == local and vm.get("id")]
+    return list(dict.fromkeys(preferred + ids))
+
+
+def terminal_resolve_envid(cookie: str) -> str:
+    """Backward-compatible preferred VM resolver."""
+    return next(iter(terminal_resolve_envids(cookie)), "")
 
 
 def terminal_discover(body: dict) -> dict:
@@ -763,54 +762,37 @@ def terminal_discover(body: dict) -> dict:
             "error": "未识别到 Cookie；同账号自动识别需要 Cookie，跨账号连接请同时提供终端 ID 和分享密码",
             "parsed": parsed,
         }
-    if not envid:
-        envid = terminal_resolve_envid(cookie)
-    code, items = terminal_list_api(cookie, envid)
-    if code != 200 or not items:
-        # The account index still answers with a valid cookie, so a failure here
-        # means the cookie is bad rather than the envid being wrong.
-        index_code = 0
-        try:
-            index_request = Request(
-                f"{TERMINAL_BASE}/api/v1/users/hosts",
-                headers={"Cookie": cookie, "User-Agent": "jiankong/1.0"},
-            )
-            with build_opener(ProxyHandler({})).open(index_request, timeout=10) as response:
-                index_code = response.status
-        except (OSError, ValueError, json.JSONDecodeError, HTTPError):
-            index_code = 0
-        if index_code != 200:
-            return {"ok": False, "error": "Cookie 已过期或无效，请重新填写 MonkeyCode Cookie", "parsed": parsed}
-        return {"ok": False, "error": f"账号下没有可识别的在线终端（envid={envid or '未知'}）", "parsed": parsed}
-    # Prefer the terminal the paste named: a same-account paste can point at a
-    # specific session, and choosing the busiest one silently ignores it.
+    envids = [envid] if envid else terminal_resolve_envids(cookie)
+    candidates: list[tuple[str, dict]] = []
+    for vm_id in envids:
+        code, vm_items = terminal_list_api(cookie, vm_id)
+        if code == 200:
+            candidates.extend((vm_id, item) for item in vm_items)
+    if not candidates:
+        return {"ok": False, "error": "账号下没有可识别的在线终端，或 Cookie 已过期/无效", "parsed": parsed}
     if terminal_id:
-        match = next((x for x in items if str(x.get("id")) == terminal_id), None)
-        if match:
-            return {
-                "ok": True,
-                "label": label or match["title"],
-                "title": match["title"],
-                "envid": envid,
-                "terminal_id": match["id"],
-                "connected_count": match["connected_count"],
-                "mode": "owner",
-                "terminals": items,
-                "note": f"已识别 {len(items)} 个在线终端，使用指定的「{match['title']}」",
-            }
+        match = next(((vm_id, item) for vm_id, item in candidates if str(item.get("id")) == terminal_id), None)
+        if not match:
+            return {"ok": False, "error": "指定终端不存在或当前不可用；未切换到其他终端", "parsed": parsed}
+        chosen_envid, chosen = match
+        return {"ok": True, "label": label or chosen["title"], "title": chosen["title"], "envid": chosen_envid,
+                "terminal_id": chosen["id"], "connected_count": chosen["connected_count"], "mode": "owner",
+                "terminals": [{**item, "envid": vm_id} for vm_id, item in candidates],
+                "note": f"已识别 {len(candidates)} 个在线终端，使用指定终端「{chosen['title']}」"}
+    # If there is no requested terminal, select the busiest available session.
     # Otherwise prefer a terminal that already has live connections: active shell.
-    items.sort(key=lambda x: int(x.get("connected_count") or 0), reverse=True)
-    chosen = items[0]
+    candidates.sort(key=lambda pair: int(pair[1].get("connected_count") or 0), reverse=True)
+    chosen_envid, chosen = candidates[0]
     return {
         "ok": True,
         "label": label or chosen["title"],
         "title": chosen["title"],
-        "envid": envid,
+        "envid": chosen_envid,
         "terminal_id": chosen["id"],
         "connected_count": chosen["connected_count"],
         "mode": "owner",
-        "terminals": items,
-        "note": f"已识别 {len(items)} 个在线终端，选择连接数最高的「{chosen['title']}」",
+        "terminals": [{**item, "envid": vm_id} for vm_id, item in candidates],
+        "note": f"已识别 {len(candidates)} 个在线终端，选择连接数最高的「{chosen['title']}」",
     }
 RESOURCE_HISTORY = collections.deque(maxlen=1200)
 RESOURCE_LOCK = threading.Lock()
@@ -1056,6 +1038,8 @@ def quick_worker_setup(worker_domain: str, admin_password: str, host_header: str
             task_id = next((i for i in ids if i), "")
         except (OSError, ValueError, json.JSONDecodeError):
             pass
+    if not upstream or not task_id:
+        raise ValueError("无法从当前 VM 环境推导 MonkeyCode 上游或 Task ID；请使用高级设置手动填写，未保存配置")
     next_guardian = merge_config(guardian_config(), {
         "enabled": True,
         "worker_admin_url": f"https://{domain}/cf-admin/",
@@ -1066,8 +1050,9 @@ def quick_worker_setup(worker_domain: str, admin_password: str, host_header: str
     saved = persist_guardian(next_guardian, str(admin_password or "").strip())
     # Write to Worker KV immediately so the connection is live on save.
     code, response = guardian_request("PUT", "config", next_guardian.get("worker_config", {}))
-    guardian_event("一键接入", code == 200 and not response.get("error"), response.get("error") or f"已通过 {domain} 接入 Worker，配置已写入 KV")
-    return {"ok": code == 200 and not response.get("error"), "setup": saved, "worker": response, "derived": {"upstreamOrigin": upstream, "taskId": task_id}}
+    ok = 200 <= code < 300 and not response.get("error")
+    guardian_event("一键接入", ok, response.get("error") or f"已通过 {domain} 接入 Worker，配置已写入 KV")
+    return {"ok": ok, "setup": saved, "worker": response, "derived": {"upstreamOrigin": upstream, "taskId": task_id}}
 
 
 def guardian_event(kind: str, ok: bool, message: str) -> None:
