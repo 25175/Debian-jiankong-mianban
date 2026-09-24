@@ -128,7 +128,30 @@ summary{cursor:pointer;font-size:12.5px}
 .topbar .notice{flex-basis:100%;min-height:0}
 @media(max-width:1100px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:900px){.two{grid-template-columns:minmax(0,1fr)}}
+/* Worker keepalive and terminal links are peer groups on wide screens. */
+.status-groups{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start;gap:16px}
+.status-group{min-width:0;padding:16px;border:1px solid var(--line);border-radius:18px;background:color-mix(in srgb,var(--panel) 74%,var(--bg));box-shadow:var(--shadow)}
+.status-group>.section-head:first-child{margin:2px 0 12px}
+.status-group .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.status-group .status-metrics{margin-bottom:12px}
+.status-group .worker-overview{grid-template-columns:repeat(2,minmax(0,1fr))}
+.status-group .worker-overview .card:last-child{grid-column:1/-1}
+.status-group .term-list{display:grid;grid-template-columns:1fr;gap:10px;align-items:start}
+.status-group .term-card{padding:12px;box-shadow:none}
+.status-group .term-card-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+.status-group .term-card-actions .btn{min-height:36px;padding:6px 10px}
+.term-list-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 10px}
+.term-list-head>strong{font-size:13px}
+.term-filters{display:flex;gap:6px;flex-wrap:wrap}
+.term-filters .btn{min-height:34px;padding:5px 10px;font-size:12px}
+.term-filters .btn.active{background:var(--brand-2);color:var(--brand);border-color:var(--brand)}
+.status-group .term-card .readback{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+.status-group .term-card .readback .wide{grid-column:1/-1}
+.status-group .term-add{margin-bottom:12px}
+@media(max-width:1050px){.status-groups{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:760px){
+ .status-group{padding:11px}
+ .status-group .worker-overview{grid-template-columns:repeat(2,minmax(0,1fr))}
  .shell{padding:12px 12px calc(28px + env(safe-area-inset-bottom))}
  .hero{margin-bottom:12px}
  .topbar{gap:6px;padding:8px}
@@ -203,7 +226,10 @@ summary{cursor:pointer;font-size:12.5px}
     <span id="notice" class="notice"></span>
   </section>
 
-  <div class="grid">
+  <div class="status-groups">
+  <section class="status-group" id="workerKeepaliveGroup">
+  <div class="section-head"><h2>Worker 保活</h2><span>定时代理、上游探测及 Cloudflare KV 状态</span></div>
+  <div class="grid worker-overview">
     <article class="card metric"><small>MonkeyCode Cookie</small><strong id="credential">读取中</strong><span id="credentialSub" class="label">—</span></article>
     <article class="card metric"><small>接入状态</small><strong id="ready">读取中</strong><span id="readySub" class="label">—</span></article>
     <article class="card metric"><small>Worker / KV</small><strong id="worker">—</strong><span id="workerSub" class="label">—</span></article>
@@ -211,7 +237,7 @@ summary{cursor:pointer;font-size:12.5px}
     <article class="card metric"><small>协议保活</small><strong id="keepalive">—</strong><span id="keepaliveSub" class="label">—</span></article>
   </div>
 
-  <div class="section-head"><h2>保活设置 / 详情</h2><span>Worker 定时代理保活与凭据管理，与终端长连接相互独立</span></div>
+  <div class="section-head"><h2>保活设置 / 详情</h2><span>Worker 定时代理保活与凭据管理</span></div>
   <section class="card" style="margin-bottom:18px">
     <div class="config" style="grid-template-columns:1.5fr 1fr auto;align-items:end">
       <label>Work 域名<input id="quickDomain" placeholder="例如 ce.example.com" autocomplete="off"></label>
@@ -286,18 +312,22 @@ summary{cursor:pointer;font-size:12.5px}
     </article>
   </section>
 
-  <div class="section-head"><h2>远程终端长连接</h2><span>每个连接独立保活，账户互不影响</span></div>
-  <div class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:14px">
+  </section>
+
+  <section class="status-group" id="remoteTerminalGroup">
+  <div class="section-head"><h2>远程终端长连接</h2><span>每条连接独立保活，可单独管理</span></div>
+  <div class="grid status-metrics" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:14px">
     <article class="card metric"><small>终端连接数</small><strong id="termCountTotal">—</strong><span class="label">已添加的独立连接</span></article>
     <article class="card metric"><small>在线连接</small><strong id="termCountOnline">—</strong><span class="label">WebSocket 保持中</span></article>
     <article class="card metric"><small>重连总计</small><strong id="termCountReconnects">—</strong><span class="label">所有连接累计自动重连</span></article>
   </div>
-  <section class="card" style="margin-bottom:18px">
+  <section class="card term-add">
     <div class="config" style="grid-template-columns:1fr;gap:10px">
       <label>粘贴连接信息自动识别（终端 ID、分享密码、Cookie 或它们的组合）<textarea id="termPaste" rows="2" placeholder="例如：https://monkeycode-ai.com/share?terminal_id=xxxx&password=xxxx 或直接粘贴 Cookie / 终端 ID" autocomplete="off" style="width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 10px;outline:0;font:inherit;resize:vertical"></textarea></label>
     </div>
     <div class="toolbar" style="margin-top:10px">
-      <button class="btn primary" id="termDiscoverBtn" onclick="terminalDiscover()">识别并连接</button>
+      <button class="btn primary" id="termDiscoverBtn" onclick="terminalSubmit()">识别并连接</button>
+      <button class="btn" id="termCancelEditBtn" onclick="terminalCancelEdit()" hidden>取消编辑</button>
       <span id="termDiscoverNote" class="label" style="align-self:center;color:var(--muted);font-size:11.5px"></span>
     </div>
     <div id="termFields" class="config" style="margin-top:12px;display:none">
@@ -313,12 +343,15 @@ summary{cursor:pointer;font-size:12.5px}
       每个连接由 8888 所在服务器独立持有并独立保活，互不影响；Cookie / 密码只存本机 600 权限文件，永不回显。</p>
   </section>
 
-  <div id="termList" class="two" style="align-items:start"></div>
+  <div class="term-list-head"><strong>已添加的终端</strong><div class="term-filters" role="group" aria-label="筛选终端"><button class="btn active" data-term-filter="all" onclick="setTerminalFilter('all')">全部</button><button class="btn" data-term-filter="online" onclick="setTerminalFilter('online')">在线</button><button class="btn" data-term-filter="offline" onclick="setTerminalFilter('offline')">离线 / 异常</button><button class="btn" onclick="loadTerminal()">↻ 刷新</button></div></div>
+  <div id="termList" class="term-list"></div>
+  </section>
+  </div>
 
 </main>
 
 <script>
-const KEY='jiankong-token',THEME_KEY='jiankong-theme';const $=id=>document.getElementById(id);let latest=null,loading=false;const dirtyFields=new Set();for(const id of ['worker_admin_url','upstreamOrigin','taskId','minSeconds','maxSeconds','keepaliveMessage','proxyTimeoutMs','retryAfterSeconds','enabled'])$(id).addEventListener('input',()=>dirtyFields.add(id));
+const KEY='jiankong-token',THEME_KEY='jiankong-theme';const $=id=>document.getElementById(id);let latest=null,latestTerminal=null,terminalFilter='all',loading=false;const dirtyFields=new Set();for(const id of ['worker_admin_url','upstreamOrigin','taskId','minSeconds','maxSeconds','keepaliveMessage','proxyTimeoutMs','retryAfterSeconds','enabled'])$(id).addEventListener('input',()=>dirtyFields.add(id));
 let token={value:localStorage.getItem(KEY)||''};
 /* ---------- login gate ---------- */
 const loginPage=$('loginPage'),appMain=$('appMain'),loginForm=$('loginForm'),loginPassword=$('loginPassword'),loginError=$('loginError');
@@ -377,11 +410,15 @@ function termCard(l){
   const label=esc(l.label||tid);
   const cls=st.status==='connected'?'good':(st.status==='reconnecting'?'warn':(st.status==='error'?'bad':''));
   const err=st.last_error?(' · '+esc(st.last_error)):(l.stale?' · 心跳超时':'');
-  return `<article class="card ${cls?'':' '}" style="${cls?'border-left:3px solid var(--'+cls+')':''}">
+  return `<article class="card term-card ${cls?'':' '}" style="${cls?'border-left:3px solid var(--'+cls+')':''}">
     <div class="credential-row" style="align-items:flex-start">
       <span class="label" style="min-width:0"><b style="color:var(--text)">${label}</b>${title?`<span style="font-size:11px;color:var(--muted)"> · ${esc(title)}</span>`:''}<br><span style="font-size:11px;color:var(--muted);font-family:ui-monospace,monospace">${esc(tid)}</span></span>
-      <button class="btn" onclick="terminalToggle('${l.id}',${l.enabled?'false':'true'})">${l.enabled?'断开':'连接'}</button>
-      <button class="btn warn" onclick="terminalDelete('${l.id}')">删除</button>
+      <span class="term-card-actions">
+        <button class="btn" onclick="terminalToggle('${l.id}',${l.enabled?'false':'true'})">${l.enabled?'断开':'连接'}</button>
+        ${l.enabled?`<button class="btn" onclick="terminalReconnect('${l.id}')">重连</button>`:''}
+        <button class="btn" onclick="terminalEdit('${l.id}')">编辑</button>
+        <button class="btn warn" onclick="terminalDelete('${l.id}')">删除</button>
+      </span>
     </div>
     <div class="readback" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-top:10px">
       <div><small>连接状态</small><strong class="${cls}">${status}</strong></div>
@@ -392,8 +429,10 @@ function termCard(l){
     </div>
   </article>`;
 }
+function setTerminalFilter(filter){terminalFilter=filter;document.querySelectorAll('[data-term-filter]').forEach(b=>b.classList.toggle('active',b.dataset.termFilter===filter));if(latestTerminal)renderTerminal(latestTerminal)}
 function renderTerminal(t){
   if(!t)return;
+  latestTerminal=t;
   $('termCountTotal').textContent=String(t.total||0);
   $('termCountOnline').textContent=String(t.connected||0);
   $('termCountOnline').className=(t.connected>0)?'good':'';
@@ -401,10 +440,17 @@ function renderTerminal(t){
   const list=$('termList');
   if(t.available===false){list.innerHTML='<article class="card"><p class="empty">本机缺少 websocket-client 组件，无法建立终端长连接；请在 VM 安装 python3-websocket-client。</p></article>';return}
   if(!t.links||!t.links.length){list.innerHTML='<article class="card"><p class="empty">尚未添加终端连接。粘贴连接信息后点「识别并连接」。</p></article>';return}
-  list.innerHTML=t.links.map(termCard).join('');
+  const links=terminalFilter==='online'?t.links.filter(l=>l.state?.status==='connected'):terminalFilter==='offline'?t.links.filter(l=>l.state?.status!=='connected'):t.links;
+  if(!links.length){list.innerHTML=`<article class="card"><p class="empty">${terminalFilter==='online'?'当前没有在线连接。':'没有符合筛选条件的连接。'}</p></article>`;return}
+  list.innerHTML=links.map(termCard).join('');
 }
 async function loadTerminal(){try{renderTerminal(await api('/api/terminal/status'))}catch(e){if(e.name!=='AbortError')console.warn('terminal status failed',e)}}
 function termBody(){return {paste:$('termPaste').value,label:$('termLabel').value,terminal_id:$('termTerminalId').value,password:$('termPassword').value,cookie:$('termCookie').value,envid:$('termEnvid').value,title:window.__termTitle||'',id:$('termEditId').value}}
+function terminalClearForm(){for(const id of ['termPaste','termLabel','termTerminalId','termPassword','termCookie','termEnvid','termEditId'])$(id).value='';window.__termTitle='';$('termFields').style.display='none';$('termCancelEditBtn').hidden=true;$('termDiscoverBtn').textContent='识别并连接';$('termDiscoverNote').textContent=''}
+function terminalCancelEdit(){terminalClearForm();say('已取消终端编辑')}
+function terminalEdit(id){const l=(latestTerminal?.links||[]).find(x=>x.id===id);if(!l)return say('连接已更新，请刷新列表后重试',true);const e=l.entry||{};$('termEditId').value=l.id;$('termLabel').value=l.label||'';$('termTerminalId').value=e.terminal_id||'';$('termEnvid').value=e.envid||'';$('termPaste').value='';$('termPassword').value='';$('termCookie').value='';window.__termTitle=e.title||l.title||'';$('termFields').style.display='grid';$('termDiscoverBtn').textContent='保存连接设置';$('termCancelEditBtn').hidden=false;$('termDiscoverNote').textContent='凭据不回显；留空保留当前已保存的凭据。';$('termLabel').focus();$('termPaste').scrollIntoView({behavior:'smooth',block:'center'})}
+async function terminalSubmit(){if($('termEditId').value)return terminalSaveEdit();return terminalDiscover()}
+async function terminalSaveEdit(){const btn=$('termDiscoverBtn');btn.disabled=true;btn.textContent='正在保存并重连…';try{const r=await api('/api/terminal/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(termBody())});if(!r.ok)throw Error(r.state?.last_error||r.error||'保存连接失败');say('连接设置已保存并重新连接');terminalClearForm();await loadTerminal()}catch(e){say('保存失败：'+e.message,true)}finally{btn.disabled=false;if($('termEditId').value)btn.textContent='保存连接设置';else btn.textContent='识别并连接'}}
 function termFillFromDiscover(r){
   if(r.label)$('termLabel').value=r.label;
   if(r.terminal_id)$('termTerminalId').value=r.terminal_id;
@@ -425,12 +471,12 @@ async function terminalDiscover(){
     const res=await api('/api/terminal/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(termBody())});
     if(!res.ok)throw Error((res.state&&res.state.last_error)||'连接失败');
     say('终端长连接已建立，由本机服务器独立保活');
-    $('termPaste').value='';$('termLabel').value='';$('termTerminalId').value='';$('termPassword').value='';$('termCookie').value='';$('termEnvid').value='';$('termEditId').value='';
-    $('termFields').style.display='none';$('termDiscoverNote').textContent='';
+    terminalClearForm();
     await loadTerminal();
   }catch(e){say('识别连接失败：'+e.message,true)}finally{btn.disabled=false;btn.textContent='识别并连接'}
 }
-async function terminalToggle(id,on){try{await api(on?'/api/terminal/setup':'/api/terminal/disable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(on?{id}:{}),});say(on?'连接已建立':'连接已断开');await loadTerminal()}catch(e){say((on?'连接':'断开')+'失败：'+e.message,true)}}
+async function terminalToggle(id,on){try{const r=await api(on?'/api/terminal/setup':'/api/terminal/disable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id}),});if(r.ok===false)throw Error(r.error||'操作失败');say(on?'连接已建立':'连接已断开');await loadTerminal()}catch(e){say((on?'连接':'断开')+'失败：'+e.message,true)}}
+async function terminalReconnect(id){try{const on=await api('/api/terminal/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});if(on.ok===false)throw Error(on.state?.last_error||on.error||'重连失败');say('终端已重新连接');await loadTerminal()}catch(e){say('终端重连失败：'+e.message,true);await loadTerminal()}}
 async function terminalDelete(id){if(!confirm('删除该终端连接？保存的凭据会一并移除。'))return;try{await api('/api/terminal/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});say('终端连接已删除');await loadTerminal()}catch(e){say('删除失败：'+e.message,true)}}
 if(token.value){load();loadTerminal();}
 setInterval(()=>{if(document.hidden||!requireLogin())return;load();loadTerminal()},12000);

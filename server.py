@@ -609,13 +609,26 @@ def terminal_apply(body: dict) -> dict:
     strictly required when a password is present.
     """
     link_id = str(body.get("id") or "").strip()
+    existing = next((x for x in _terminal_links_config() if str(x.get("id") or "") == link_id), {}) if link_id else {}
     parsed = _parse_paste(str(body.get("paste") or ""))
-    label = str(body.get("label") or parsed.get("label") or "").strip()[:60]
-    title = str(body.get("title") or "").strip()[:60]
-    envid = str(body.get("envid") or parsed.get("envid") or "").strip()
-    terminal_id = str(body.get("terminal_id") or parsed.get("terminal_id") or "").strip()
-    cookie = _normalize_cookie(str(body.get("cookie") or parsed.get("cookie") or ""))
-    password = str(body.get("password") or parsed.get("password") or "").strip()
+
+    def field(name: str, parsed_name: str | None = None) -> str:
+        if name in body:
+            return str(body.get(name) or "").strip()
+        if parsed_name and parsed.get(parsed_name):
+            return str(parsed[parsed_name]).strip()
+        return str(existing.get(name) or "").strip()
+
+    label = field("label")[:60]
+    title = field("title")[:60]
+    envid = field("envid")
+    terminal_id = field("terminal_id")
+    cookie_input = str(body.get("cookie") or parsed.get("cookie") or "").strip()
+    password_input = str(body.get("password") or parsed.get("password") or "").strip()
+    # Secrets are never echoed back to the UI. Sparse reconnect requests and
+    # blank edit fields therefore retain the already-saved credentials.
+    cookie = _normalize_cookie(cookie_input) if cookie_input else str(existing.get("cookie") or "")
+    password = password_input if password_input else str(existing.get("password") or "")
     if not link_id:
         link_id = _new_link_id()
     entry = {
