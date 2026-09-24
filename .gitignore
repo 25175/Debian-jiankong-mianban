@@ -1,4 +1,3 @@
-control-token
 cloudflare-guardian-secret.json
 jiankong.local.json
 plugins.local.json
@@ -6,3 +5,4 @@ plugins.local.json
 __pycache__/
 *.pyc
 *.bak-*
+control-token
