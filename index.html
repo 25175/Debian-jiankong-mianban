@@ -44,10 +44,24 @@ h1{margin:5px 0 2px;font-size:26px;letter-spacing:-.01em}
 .health:not(.bad) strong{color:var(--good)}
 .egress-chip{display:none;flex-direction:column;gap:2px;text-align:left;cursor:pointer;
   background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
-  padding:12px 16px;box-shadow:var(--shadow);color:inherit;transition:.15s;max-width:230px}
+  padding:12px 16px;box-shadow:var(--shadow);color:inherit;transition:.15s;max-width:230px;min-width:0}
 .egress-chip:hover{transform:translateY(-2px);border-color:var(--brand)}
 .egress-chip small{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.06em}
-.egress-chip strong{font-size:13px;font-weight:600;word-break:break-all}
+.egress-chip strong{display:block;max-width:100%;font-size:13px;font-weight:600;line-height:1.4;overflow-wrap:anywhere;word-break:normal}
+.egress-line{display:block;white-space:nowrap;font-variant-numeric:tabular-nums}
+@media(max-width:560px){
+ .hero>div:last-child>.egress-chip{flex:0 0 60%;min-width:0;padding:9px 10px}
+ .hero>div:last-child>.egress-chip strong{font-size:clamp(7px,2.5vw,11px)}
+ .egress-chip small{font-size:9.5px;letter-spacing:0}
+ .egress-chip strong{font-size:clamp(7px,2.5vw,11px);line-height:1.55;white-space:normal;overflow-wrap:normal;word-break:normal}
+ .egress-line{white-space:nowrap}
+}
+@media(max-width:350px){
+ .hero>div:last-child{gap:6px!important}
+ .hero>div:last-child>.egress-chip{padding:8px 7px}
+ .egress-chip strong{font-size:7px;letter-spacing:-.05em}
+ .egress-chip small{font-size:9px}
+}
 
 /* ---------- top bar ---------- */
 .topbar{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
@@ -179,7 +193,8 @@ svg.resource-spark path{fill:none;stroke:var(--brand);stroke-width:1.6;vector-ef
  .hero>div:last-child{flex:0 0 100%;width:100%;min-width:0;flex-wrap:nowrap;gap:8px}
  .hero>div:last-child>.health{flex:1 1 0;min-width:0}
  .hero>div:last-child>.health strong{font-size:clamp(11px,4.55vw,16px);white-space:nowrap}
- .hero>div:last-child>.egress-chip{flex:1 1 0;min-width:0;max-width:none}
+ .hero>div:last-child>.egress-chip{flex:0 0 60%;min-width:0;max-width:none;padding:9px 10px}
+ .hero>div:last-child>.egress-chip strong{font-size:clamp(7px,2.5vw,11px)}
  .shell{padding:12px 12px calc(28px + env(safe-area-inset-bottom))}
  .hero{gap:10px}
  .hero .meta{max-width:100%;overflow-wrap:anywhere}
@@ -324,12 +339,10 @@ function fmtMem(n){const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.
 function spark(values){if(values.length<2)return '<svg class="resource-spark" viewBox="0 0 100 25" preserveAspectRatio="none"><path d="M0 19 L100 19" opacity=".35"/></svg>';const hi=Math.max(100,...values,1),pts=values.map((v,i)=>`${(i/(values.length-1)*100).toFixed(1)},${(22-v/hi*18).toFixed(1)}`).join(' L');return `<svg class="resource-spark" viewBox="0 0 100 25" preserveAspectRatio="none"><path d="M${pts}"/></svg>`}
 function resourceCard(key,title,value,sub,pct,state,values,warming){return `<button class="resource-card ${state}" onclick="resourceDetail('${key}')"><span class="r-top"><span>${title}</span><span class="r-live">${warming?'采样中':'实时 · 60 秒'}</span></span><strong class="r-value">${value}</strong><span class="r-sub">${sub}</span>${pct!==null?`<span class="resource-meter"><span style="width:${Math.min(100,pct)}%"></span></span>`:'<span style="height:17px"></span>'}${spark(values)}</button>`}
 let resourceData=null;
-/* Small screens: the egress card is too wide for the 2-col resource strip, but
-   folding its text into the health line would swallow the click target. Render
-   it as a compact chip beside the health box instead — same click, same modal,
-   no standalone card. */let egressHTML='';
-function renderHealthEgress(pub,cn,intl){if(pub.error){egressHTML='出口查询不可用'}else if(!cn.ip&&!intl.ip){egressHTML='查询中'}else{egressHTML=`国内 ${cn.ip||'—'} · 国际 ${intl.ip||'—'}`}paintHealthEgress()}
-function paintHealthEgress(){const chip=document.querySelector('#egress-chip');if(!chip)return;chip.querySelector('strong').textContent=egressHTML;chip.style.display=egressHTML?'flex':'none'}
+/* Keep the domestic and international egress values in fixed, separate lines.
+   The compact chip remains a single accessible click target beside system health. */let egressHTML='';
+function renderHealthEgress(pub,cn,intl){if(pub.error){egressHTML='出口查询不可用'}else if(!cn.ip&&!intl.ip){egressHTML='查询中'}else{egressHTML=`<span class="egress-line">国内 ${esc(cn.ip||'—')}</span><span class="egress-line">国际 ${esc(intl.ip||'—')}</span>`}paintHealthEgress()}
+function paintHealthEgress(){const chip=document.querySelector('#egress-chip');if(!chip)return;chip.querySelector('strong').innerHTML=egressHTML;chip.style.display=egressHTML?'flex':'none'}
 function renderResources(r){resourceData=r;const v=r.recent||[],warm=v.length<18,cpu=v.map(x=>x.cpu),mem=v.map(x=>x.memory),disk=v.map(x=>x.disk),net=v.map(x=>x.down+x.up);const a=r.sample,measuring=v.length<2,mobile=innerWidth<=560,capacity=(x)=>mobile?`${(x.used/1073741824).toFixed(1)} / ${(x.total/1073741824).toFixed(1)} GB`:`${fmtMem(x.used)} / ${fmtMem(x.total)}`,network=measuring?'采集中':mobile?`↓ ${fmtBytes(r.network.down)}<br>↑ ${fmtBytes(r.network.up)}`:`↓ ${fmtBytes(r.network.down)} · ↑ ${fmtBytes(r.network.up)}`;const ma=r.memory.accounting||{},memorySub=ma.consistent?`${a.memory}% 已使用 · 可见进程 ${fmtMem(ma.visible_process_rss||0)}`:`系统口径 ${a.memory}% · 可见进程仅 ${fmtMem(ma.visible_process_rss||0)} · 平台记账差异 ${fmtMem(ma.unexplained_used||0)}`;const pub=r.network.public||{},cn=pub.domestic||{},intl=pub.international||{},pubState=pub.error?'warning':(cn.ip&&intl.ip?'ok':'warning'),pubValue=cn.ip?`国内 ${cn.ip}`:'查询中',pubSub=pub.error?'出口 IP 查询暂不可用':(intl.ip?`国际 ${intl.ip}`:'正在查询国内 / 国际出口');if(mobile){renderHealthEgress(pub,cn,intl)}else{const chip=document.querySelector('#egress-chip');if(chip)chip.style.display='none'};resources.innerHTML=resourceCard('cpu','CPU',measuring?'采集中':a.cpu+'%',measuring?'正在建立第一个有效样本':'使用率',measuring?0:a.cpu,r.cpu.state,cpu,warm)+resourceCard('memory','内存',capacity(r.memory),memorySub,a.memory,ma.consistent?r.memory.state:'warning',mem,warm)+resourceCard('disk','磁盘',capacity(r.disk),`${a.disk}% 已使用`,a.disk,r.disk.state,disk,warm)+resourceCard('network','网络',network,measuring?`正在识别活动网卡 · ${r.network.iface}`:`活动网卡 · ${r.network.iface}`,null,r.network.state,net,warm)+(mobile?'':resourceCard('public-network','国内 / 国际出口',pubValue,pubSub,null,pubState,[],false))}
 function resourceDetail(key){if(!resourceData)return;const r=resourceData;if(key==='public-network'){const p=r.network?.public||{},cn=p.domestic||{},intl=p.international||{};openModal('国内 / 国际出口 IP',`国内出口 IP：${cn.ip||'查询中'}\n国内出口位置：${cn.location||'定位中'}\n国内服务商：${cn.isp||'服务未返回'}\n\n国际出口 IP：${intl.ip||'查询中'}\n国际出口位置：${intl.location||'定位中'}\n国际服务商：${intl.isp||'服务未返回'}${p.error?`\n\n查询说明：${p.error}`:''}`);return}const h=r.hour||[],cfg={cpu:['CPU 使用率','cpu','%'],memory:['内存使用率','memory','%'],disk:['磁盘使用率','disk','%'],network:['网络总吞吐','net','B/s']}[key];if(!cfg)return;const vals=h.map(x=>key==='network'?x.down+x.up:x[cfg[1]]),max=key==='network'?Math.max(...vals,1):100,w=760,hh=150,pts=vals.map((v,i)=>`${(i/Math.max(1,vals.length-1)*w).toFixed(1)},${(hh-12-v/max*(hh-26)).toFixed(1)}`).join(' L');openModal(`${cfg[0]} · 最近 1 小时`,`每 3 秒采样一次；数据仅保留在监控服务内存中，重启后清空。当前：${key==='network'?`↓ ${fmtBytes(r.network.down)} · ↑ ${fmtBytes(r.network.up)}`:r.sample[cfg[1]]+cfg[2]}`);logBox.hidden=false;logBox.className='large-spark';logBox.innerHTML=`<svg viewBox="0 0 ${w} ${hh}" preserveAspectRatio="none"><path class="gridline" d="M0 30H${w} M0 75H${w} M0 120H${w}"/><path d="M${pts}"/></svg>`}
 async function loadResources(){if(!requireToken())return;try{renderResources(await api('/api/resources'))}catch(e){console.warn(e)}}
