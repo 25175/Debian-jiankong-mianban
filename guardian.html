@@ -129,9 +129,13 @@ summary{cursor:pointer;font-size:12.5px}
 @media(max-width:1100px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:900px){.two{grid-template-columns:minmax(0,1fr)}}
 /* Worker status details share one overview panel; events remain separate. */
-.worker-status-board{padding:14px;margin-bottom:18px}
-.worker-status-board .worker-overview{margin:0 0 12px}
-.worker-status-board .worker-details{grid-template-columns:repeat(4,minmax(0,1fr))}
+.worker-status-board{margin-bottom:18px;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+.worker-status-board .worker-overview{margin:0}
+.worker-status-board .metric{min-width:0;background:var(--panel-2);border-color:var(--line);box-shadow:none}
+.worker-details{margin:12px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)}
+.worker-details>summary{display:flex;align-items:center;gap:8px;min-height:40px;color:var(--text-2);font-weight:650}
+.worker-details[open]>summary{margin-bottom:10px}
+.worker-details .readback{grid-template-columns:repeat(4,minmax(0,1fr))}
 .worker-events{margin-bottom:18px}
 /* Two browser-style tabs keep the Worker and terminal workspaces separate. */
 .main-tabs{display:flex;align-items:flex-end;gap:4px;margin:10px 0 0;padding:0 8px;border-bottom:1px solid var(--line);overflow-x:auto}
@@ -147,12 +151,22 @@ summary{cursor:pointer;font-size:12.5px}
 .term-list-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 12px}
 .term-list-title{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-width:0}
 .term-list-title>strong{font-size:13px}
-.term-summary{display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:var(--muted);font-size:11.5px}
-.term-summary span{white-space:nowrap;padding:3px 8px;border:1px solid var(--line);border-radius:999px;background:var(--panel-2)}
-.term-summary b{color:var(--text);font-variant-numeric:tabular-nums}
-.term-filters{display:flex;gap:6px;flex-wrap:wrap}
-.term-filters .btn{min-height:34px;padding:5px 10px;font-size:12px}
+.term-filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;width:100%;margin-top:3px}
+.term-filters .btn{position:relative;justify-content:center;gap:6px;min-height:40px;padding:6px 10px;font-size:12px}
+.term-filters .filter-count{display:inline-grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:var(--bg-2);color:var(--text-2);font-size:11px;font-weight:750;font-variant-numeric:tabular-nums}
 .term-filters .btn.active{background:var(--brand-2);color:var(--brand);border-color:var(--brand)}
+.term-filters .btn.active .filter-count{background:var(--brand);color:#fff}
+.term-history{margin:12px 0 0;border-top:1px solid var(--line);padding-top:10px}
+.term-history>summary{display:flex;align-items:center;gap:7px;min-height:36px;color:var(--text-2);font-size:12px;font-weight:650;list-style:none}
+.term-history>summary::-webkit-details-marker{display:none}
+.term-history>summary::before{content:'›';font-size:18px;line-height:1;transition:transform .15s}
+.term-history[open]>summary::before{transform:rotate(90deg)}
+.term-history-count{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:var(--bg-2);color:var(--muted);font-size:10px;font-variant-numeric:tabular-nums}
+.term-history-list{display:grid;gap:6px;margin-top:8px}
+.term-history-row{display:grid;grid-template-columns:minmax(95px,auto) minmax(0,1fr);gap:8px;align-items:start;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2);font-size:11.5px}
+.term-history-row time{color:var(--muted);font-variant-numeric:tabular-nums}
+.term-history-row b{display:block;color:var(--text);font-weight:650;overflow-wrap:anywhere}
+.term-history-row span{display:block;color:var(--muted);overflow-wrap:anywhere}
 .term-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
 .term-card{padding:12px}
 .term-card-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
@@ -168,10 +182,8 @@ summary{cursor:pointer;font-size:12.5px}
  .term-manage{padding:10px}
  .term-list-head{align-items:flex-start}
  .term-list-title{width:100%;gap:7px}
- .term-summary{gap:4px;font-size:10.5px}
- .term-summary span{padding:2px 6px}
- .term-filters{width:100%}
- .term-filters .btn{flex:1 1 auto}
+ .term-filters{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+ .term-filters .btn{min-height:42px}
  .shell{padding:12px 12px calc(28px + env(safe-area-inset-bottom))}
  .hero{margin-bottom:12px}
  .topbar{gap:6px;padding:8px}
@@ -181,7 +193,7 @@ summary{cursor:pointer;font-size:12.5px}
  .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
  .worker-status-board{padding:10px}
  .worker-status-board .worker-overview{grid-template-columns:repeat(2,minmax(0,1fr))}
- .worker-status-board .worker-details{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .worker-details .readback{grid-template-columns:repeat(2,minmax(0,1fr))}
  .card{padding:10px;min-width:0}
  .card strong{font-size:clamp(14px,4vw,18px);overflow-wrap:anywhere}
  .section-head{gap:6px;flex-wrap:wrap}
@@ -203,8 +215,9 @@ summary{cursor:pointer;font-size:12.5px}
  .shell{padding-left:8px;padding-right:8px}
  .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
  .worker-status-board{padding:8px}
- .worker-status-board .worker-overview,.worker-status-board .worker-details{grid-template-columns:minmax(0,1fr)}
- .worker-status-board .worker-details .wide{grid-column:auto}
+ .worker-status-board .worker-overview{grid-template-columns:minmax(0,1fr)}
+ .worker-details .readback{grid-template-columns:minmax(0,1fr)}
+ .worker-details .readback .wide{grid-column:auto}
  .metric{padding:9px 8px}
  .metric strong{font-size:13px;overflow-wrap:anywhere}
  .metric small,.metric .label{font-size:10.5px}
@@ -217,10 +230,9 @@ summary{cursor:pointer;font-size:12.5px}
  .term-manage{padding:8px}
  .term-list-head{gap:7px}
  .term-list-title{align-items:flex-start;flex-direction:column}
- .term-summary{width:100%;justify-content:flex-start}
- .term-summary span{white-space:normal}
- .term-filters{gap:4px}
+ .term-filters{gap:5px}
  .term-filters .btn{padding:5px 6px;font-size:11px}
+ .term-history-row{grid-template-columns:minmax(0,1fr);gap:3px}
 }
 /* ---------- login page ---------- */
 .login-page[hidden]{display:none!important}
@@ -275,13 +287,16 @@ summary{cursor:pointer;font-size:12.5px}
       <article class="card metric"><small>MonkeyCode 上游</small><strong id="upstream">—</strong><span id="upstreamSub" class="label">—</span></article>
       <article class="card metric"><small>协议保活</small><strong id="keepalive">—</strong><span id="keepaliveSub" class="label">—</span></article>
     </div>
-    <div class="readback worker-details">
-      <div><small>Worker 时间</small><strong id="rb-time">—</strong></div><div><small>凭据更新时间</small><strong id="rb-credential-at">—</strong></div>
-      <div><small>Worker Cookie 有效期</small><strong id="credentialExpiryState">读取中</strong></div>
-      <div><small>保活结果</small><strong id="rb-status">—</strong></div><div><small>上次保活</small><strong id="rb-last">—</strong></div>
-      <div><small>下次计划</small><strong id="rb-next">—</strong></div><div class="wide"><small>最新错误 / 说明</small><strong id="rb-message">—</strong></div>
-    </div>
-    <details><summary>查看原始 Worker 返回（排障用）</summary><pre id="details" class="json">等待读取…</pre></details>
+    <details class="worker-details">
+      <summary>详细读回与排障信息（时间、有效期、计划及错误）</summary>
+      <div class="readback">
+        <div><small>Worker 时间</small><strong id="rb-time">—</strong></div><div><small>凭据更新时间</small><strong id="rb-credential-at">—</strong></div>
+        <div><small>Worker Cookie 有效期</small><strong id="credentialExpiryState">读取中</strong></div>
+        <div><small>保活结果</small><strong id="rb-status">—</strong></div><div><small>上次保活</small><strong id="rb-last">—</strong></div>
+        <div><small>下次计划</small><strong id="rb-next">—</strong></div><div class="wide"><small>最新错误 / 说明</small><strong id="rb-message">—</strong></div>
+      </div>
+      <details><summary>查看原始 Worker 返回（排障用）</summary><pre id="details" class="json">等待读取…</pre></details>
+    </details>
   </section>
 
   <div class="section-head"><h2>保活设置 / 详情</h2><span>Worker 定时代理保活与凭据管理</span></div>
@@ -372,8 +387,14 @@ summary{cursor:pointer;font-size:12.5px}
   </section>
 
   <section class="card term-manage">
-    <div class="term-list-head"><div class="term-list-title"><strong>已添加的终端</strong><div class="term-summary" aria-label="终端连接统计"><span>连接 <b id="termCountTotal">—</b></span><span>在线 <b id="termCountOnline">—</b></span><span>重连 <b id="termCountReconnects">—</b></span></div></div><div class="term-filters" role="group" aria-label="筛选终端"><button class="btn active" data-term-filter="all" onclick="setTerminalFilter('all')">全部</button><button class="btn" data-term-filter="online" onclick="setTerminalFilter('online')">在线</button><button class="btn" data-term-filter="offline" onclick="setTerminalFilter('offline')">离线 / 异常</button><button class="btn" onclick="loadTerminal()">↻ 刷新</button></div></div>
+    <div class="term-list-head"><div class="term-list-title"><strong>已添加的终端</strong></div><div class="term-filters" role="group" aria-label="筛选终端">
+      <button class="btn active" data-term-filter="all" onclick="setTerminalFilter('all')">全部 <span class="filter-count" id="termCountTotal">—</span></button>
+      <button class="btn" data-term-filter="online" onclick="setTerminalFilter('online')">在线 <span class="filter-count" id="termCountOnline">—</span></button>
+      <button class="btn" data-term-filter="offline" onclick="setTerminalFilter('offline')">离线 / 异常 <span class="filter-count" id="termCountOffline">—</span></button>
+      <button class="btn" onclick="loadTerminal()">↻ 刷新</button>
+    </div></div>
     <div id="termList" class="term-list"></div>
+    <details class="term-history"><summary>历史记录 <span class="term-history-count" id="termHistoryCount">0</span></summary><div id="termHistoryList" class="term-history-list"><p class="empty">暂无连接历史。</p></div></details>
   </section>
   </section>
   </section>
@@ -382,11 +403,11 @@ summary{cursor:pointer;font-size:12.5px}
 </main>
 
 <script>
-const KEY='jiankong-token',THEME_KEY='jiankong-theme',TAB_KEY='jiankong-center-tab';const $=id=>document.getElementById(id);let latest=null,latestTerminal=null,terminalFilter='all',loading=false;const dirtyFields=new Set();for(const id of ['worker_admin_url','upstreamOrigin','taskId','minSeconds','maxSeconds','keepaliveMessage','proxyTimeoutMs','retryAfterSeconds','enabled'])$(id).addEventListener('input',()=>dirtyFields.add(id));
+const KEY='jiankong-token',THEME_KEY='jiankong-theme',TAB_KEY='jiankong-center-tab',TERM_HISTORY_KEY='jiankong-terminal-history-v1',TERM_SNAPSHOT_KEY='jiankong-terminal-snapshot-v1';const $=id=>document.getElementById(id);let latest=null,latestTerminal=null,terminalFilter='all',loading=false;const dirtyFields=new Set();for(const id of ['worker_admin_url','upstreamOrigin','taskId','minSeconds','maxSeconds','keepaliveMessage','proxyTimeoutMs','retryAfterSeconds','enabled'])$(id).addEventListener('input',()=>dirtyFields.add(id));
 let token={value:localStorage.getItem(KEY)||''};
 /* ---------- login gate ---------- */
 const loginPage=$('loginPage'),appMain=$('appMain'),loginForm=$('loginForm'),loginPassword=$('loginPassword'),loginError=$('loginError');
-function showApp(){loginPage.hidden=true;appMain.hidden=false;load()}
+function showApp(){loginPage.hidden=true;appMain.hidden=false;load();loadTerminal()}
 function showLogin(){const wasHidden=loginPage.hidden;loginPage.hidden=false;appMain.hidden=true;if(wasHidden){loginError.textContent='';loginPassword.focus()}}
 function logout(){localStorage.removeItem(KEY);token.value='';loginPassword.value='';showLogin()}
 let loginAttempt=0;
@@ -463,15 +484,19 @@ function termCard(l){
 function setMainTab(name,save=true){const terminal=name==='terminal';$('workerTab').setAttribute('aria-selected',String(!terminal));$('workerTab').tabIndex=terminal?-1:0;$('terminalTab').setAttribute('aria-selected',String(terminal));$('terminalTab').tabIndex=terminal?0:-1;$('workerTabPanel').hidden=terminal;$('terminalTabPanel').hidden=!terminal;if(save)localStorage.setItem(TAB_KEY,terminal?'terminal':'worker')}
 document.querySelector('.main-tabs').addEventListener('keydown',e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();const terminal=e.key==='ArrowRight'||e.key==='End';const tab=$(terminal?'terminalTab':'workerTab');setMainTab(terminal?'terminal':'worker');tab.focus()});
 setMainTab(localStorage.getItem(TAB_KEY)==='terminal'?'terminal':'worker',false);
+function readTerminalHistory(){try{const value=JSON.parse(localStorage.getItem(TERM_HISTORY_KEY)||'[]');return Array.isArray(value)?value:[]}catch{return []}}
+function recordTerminalHistory(t){const history=readTerminalHistory(),now=Date.now(),links=t.links||[];let snapshot={};try{snapshot=JSON.parse(localStorage.getItem(TERM_SNAPSHOT_KEY)||'{}')||{}}catch{}const current={},events=[];for(const link of links){const id=String(link.id||'');if(!id)continue;const state=link.state||{},status=state.status||'disconnected',reconnects=Number(state.reconnects)||0,title=link.label||link.title||id;current[id]={status,reconnects,title};const old=snapshot[id];if(old){if(old.status!==status)events.push({id,title,status,at:now,message:status==='connected'?'连接已建立':status==='disconnected'?'连接已断开':status==='reconnecting'?'连接正在重连':state.last_error||'连接状态发生变化'});else if(reconnects>Number(old.reconnects||0))events.push({id,title,status,at:now,message:`自动重连次数增加至 ${reconnects}`})}else if(Object.keys(snapshot).length)events.push({id,title,status,at:now,message:'已加入终端连接列表'})}for(const [id,old] of Object.entries(snapshot)){if(!current[id])events.push({id,title:old.title||id,status:'disconnected',at:now,message:'已从终端连接列表删除'})}try{localStorage.setItem(TERM_SNAPSHOT_KEY,JSON.stringify(current));if(events.length)localStorage.setItem(TERM_HISTORY_KEY,JSON.stringify([...events,...history].slice(0,40)))}catch{}}
+function renderTerminalHistory(){const items=readTerminalHistory();$('termHistoryCount').textContent=String(items.length);const list=$('termHistoryList');if(!items.length){list.innerHTML='<p class="empty">暂无连接历史。</p>';return}list.innerHTML=items.map(item=>`<div class="term-history-row"><time>${esc(new Date(item.at).toLocaleString())}</time><div><b>${esc(item.title||item.id||'终端')} · ${esc(TERM_STATUS[item.status]||item.status||'状态变化')}</b><span>${esc(item.message||'')}</span></div></div>`).join('')}
 function setTerminalFilter(filter){terminalFilter=filter;document.querySelectorAll('[data-term-filter]').forEach(b=>b.classList.toggle('active',b.dataset.termFilter===filter));if(latestTerminal)renderTerminal(latestTerminal)}
 function renderTerminal(t){
   if(!t)return;
   latestTerminal=t;
-  $('termCountTotal').textContent=String(t.total||0);
-  $('terminalTabCount').textContent=String(t.total||0);
-  $('termCountOnline').textContent=String(t.connected||0);
-  $('termCountOnline').className=(t.connected>0)?'good':'';
-  $('termCountReconnects').textContent=String((t.links||[]).reduce((a,l)=>a+((l.state&&l.state.reconnects)||0),0));
+  recordTerminalHistory(t);renderTerminalHistory();
+  const connected=(t.links||[]).filter(l=>l.state?.status==='connected').length,offline=Math.max(0,(t.links||[]).length-connected);
+  $('termCountTotal').textContent=String((t.links||[]).length);
+  $('terminalTabCount').textContent=String((t.links||[]).length);
+  $('termCountOnline').textContent=String(connected);
+  $('termCountOffline').textContent=String(offline);
   const list=$('termList');
   if(t.available===false){list.innerHTML='<article class="card"><p class="empty">本机缺少 websocket-client 组件，无法建立终端长连接；请在 VM 安装 python3-websocket-client。</p></article>';return}
   if(!t.links||!t.links.length){list.innerHTML='<article class="card"><p class="empty">尚未添加终端连接。粘贴连接信息后点「识别并连接」。</p></article>';return}
@@ -512,10 +537,10 @@ async function terminalDiscover(){
     await loadTerminal();
   }catch(e){say('识别连接失败：'+e.message,true)}finally{btn.disabled=false;btn.textContent='识别并连接'}
 }
-async function terminalToggle(id,on){try{const r=await api(on?'/api/terminal/setup':'/api/terminal/disable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id}),});if(r.ok===false)throw Error(r.error||'操作失败');say(on?'连接已建立':'连接已断开');await loadTerminal()}catch(e){say((on?'连接':'断开')+'失败：'+e.message,true)}}
+async function terminalToggle(id,on){try{const r=await api(on?'/api/terminal/setup':'/api/terminal/disable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});if(r.ok===false)throw Error(r.state?.last_error||r.error||'操作失败');say(on?'连接已建立':'已断开此终端长连接并停止自动重连；点「连接」可再次启动。');await loadTerminal()}catch(e){say((on?'连接':'断开')+'失败：'+e.message,true);await loadTerminal()}}
 async function terminalReconnect(id){try{const on=await api('/api/terminal/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});if(on.ok===false)throw Error(on.state?.last_error||on.error||'重连失败');say('终端已重新连接');await loadTerminal()}catch(e){say('终端重连失败：'+e.message,true);await loadTerminal()}}
 async function terminalDelete(id){if(!confirm('删除该终端连接？保存的凭据会一并移除。'))return;try{await api('/api/terminal/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});say('终端连接已删除');await loadTerminal()}catch(e){say('删除失败：'+e.message,true)}}
-if(token.value){load();loadTerminal();}
+if(token.value)load();
 setInterval(()=>{if(document.hidden||!requireLogin())return;load();loadTerminal()},12000);
 setInterval(()=>{if(!document.hidden)updateTerminalUptimes()},1000);
 function requireLogin(){if(token.value.trim())return true;showLogin();return false}
