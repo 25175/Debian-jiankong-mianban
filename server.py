@@ -167,6 +167,12 @@ BUILTIN_PLUGINS = {
 ISSUE_TITLE_CACHE: dict[str, str] = {}
 TERMINAL_BASE = "https://monkeycode-ai.com"
 TERMINAL_CONFIG_PATH = BASE / "terminals.local.json"
+# The platform's terminal socket never answers pings: its own web client just
+# sends {"type":"ping"} on a timer and reads whatever output arrives (no
+# "pong" exists in the whole client bundle). Pinging is therefore one-way
+# keepalive, and a read timeout means an idle terminal, not a dead link.
+TERMINAL_PING_INTERVAL = 10
+TERMINAL_READ_TIMEOUT = 12
 TERMINAL_LOCK = threading.Lock()
 TERMINAL_SECRET_FIELDS = ("cookie", "password")
 # websocket-client is present on this VM, but the panel must still boot on a
@@ -475,6 +481,9 @@ class TerminalLink:
 
     def _connect(self) -> None:
         self._ws = websocket.create_connection(_ws_url(self.entry), timeout=20, header=_terminal_headers(self.entry))
+        # Handshake uses the 20s connect timeout above; afterwards reads must
+        # return control to the heartbeat loop so pings keep their cadence.
+        self._ws.settimeout(TERMINAL_READ_TIMEOUT)
 
     def start(self) -> bool:
         """Open the link; the keepalive thread is started by the caller."""
@@ -509,20 +518,34 @@ class TerminalLink:
         self._set(status="disconnected", connected_since=None)
 
     def _heartbeat(self) -> None:
-        """Ping forever; reconnect with this link's own stored credentials."""
+        """Ping on a timer; reconnect with this link's own stored credentials.
+
+        Only a closed socket or a protocol error justifies a reconnect. A read
+        timeout is normal idle time on this platform (the server never answers
+        pings), so it must not tear the link down: a reconnect replays the
+        stored password, and one-time share passwords are then rejected with
+        验证密码失败, killing a link that was still alive.
+        """
         backoff = 5
+        last_ping = time.time()
         while not self._stop.is_set():
             ws = self._ws
             if ws is None:
                 break
             try:
-                ws.send(json.dumps({"type": "ping", "data": ""}))
-                raw = ws.recv()
-                kind = _frame_kind(raw)
-                if kind:
-                    self._set(last_pong=time.time())
+                if time.time() - last_ping >= TERMINAL_PING_INTERVAL:
+                    ws.send(json.dumps({"type": "ping", "data": ""}))
+                    last_ping = time.time()
+                # Consume whatever the server pushed (terminal output). Idle
+                # terminals send nothing for a long time; that is not an error.
+                try:
+                    raw = ws.recv()
+                    if _frame_kind(raw):
+                        self._set(last_pong=time.time())
+                except websocket.WebSocketTimeoutException:
+                    pass
                 backoff = 5
-            except Exception as exc:  # noqa: BLE001 - any frame error means the link died
+            except Exception as exc:  # noqa: BLE001 - a real socket/protocol error
                 if self._stop.is_set():
                     break
                 # Forced off (server restart, idle reaping, route change): this
@@ -545,7 +568,10 @@ class TerminalLink:
                     self._set(status="error", last_error="重连失败：" + self._safe_error(inner))
                     time.sleep(backoff)
                     backoff = min(backoff * 2, 60)
-            time.sleep(10)
+                continue
+            # recv() already blocks up to TERMINAL_READ_TIMEOUT, so only pace
+            # the busy-output path; idle loops wake on the read timeout itself.
+            time.sleep(0.2)
 
     def _refresh_share_password(self) -> None:
         """Mint a new share password for this link's terminal, share channel only.
